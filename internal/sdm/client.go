@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
 
 	"github.com/avanha/pmaas-plugin-nestthermostat/entities"
 	"golang.org/x/oauth2"
@@ -18,6 +19,10 @@ type ClientOptions struct {
 	SdmProjectID string
 }
 
+type UserInfo struct {
+	Email string `json:"email"`
+}
+
 type Traits struct {
 	Info Info `json:"sdm.devices.traits.Info"`
 }
@@ -27,8 +32,9 @@ type Info struct {
 }
 
 type Client struct {
-	service *smartdevicemanagement.Service
-	options ClientOptions
+	httpClient *http.Client
+	service    *smartdevicemanagement.Service
+	options    ClientOptions
 }
 
 func NewClient(ctx context.Context, options ClientOptions) (*Client, error) {
@@ -50,9 +56,30 @@ func NewClient(ctx context.Context, options ClientOptions) (*Client, error) {
 	}
 
 	return &Client{
-		service: service,
-		options: options,
+		httpClient: httpClient,
+		service:    service,
+		options:    options,
 	}, nil
+}
+
+func (c *Client) FetchUserInfo(ctx context.Context) (UserInfo, error) {
+	resp, err := c.httpClient.Get("https://www.googleapis.com/oauth2/v3/userinfo")
+
+	if err != nil {
+		return UserInfo{}, err
+	}
+
+	defer func() {
+		err := resp.Body.Close()
+		fmt.Println("Error closing response body: ", err)
+	}()
+
+	var info UserInfo
+	if err := json.NewDecoder(resp.Body).Decode(&info); err != nil {
+		return info, err
+	}
+
+	return info, nil
 }
 
 func (c *Client) FetchDevices(ctx context.Context) ([]entities.NestThermostat, error) {

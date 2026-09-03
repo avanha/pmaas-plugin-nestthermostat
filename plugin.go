@@ -8,7 +8,10 @@ import (
 	"time"
 
 	"github.com/avanha/pmaas-plugin-nestthermostat/config"
+	"github.com/avanha/pmaas-plugin-nestthermostat/data"
 	"github.com/avanha/pmaas-plugin-nestthermostat/entities"
+	"github.com/avanha/pmaas-plugin-nestthermostat/internal/common"
+	"github.com/avanha/pmaas-plugin-nestthermostat/internal/http"
 	poller2 "github.com/avanha/pmaas-plugin-nestthermostat/internal/poller"
 	"github.com/avanha/pmaas-plugin-nestthermostat/internal/pubsub"
 	"github.com/avanha/pmaas-plugin-nestthermostat/internal/sdm"
@@ -23,20 +26,24 @@ func NewPluginConfig() config.PluginConfig {
 type plugin struct {
 	container     spi.IPMAASContainer
 	config        config.PluginConfig
+	httpHandler   *http.Handler
 	thermostats   map[string]*entities.NestThermostat
 	cancelWorkers context.CancelFunc
 	workersWg     sync.WaitGroup
+	googleUser    string
 }
 
 func NewPlugin(cfg config.PluginConfig) spi.IPMAASPlugin {
 	return &plugin{
 		config:      cfg,
+		httpHandler: http.NewHandler(),
 		thermostats: make(map[string]*entities.NestThermostat),
 	}
 }
 
 func (p *plugin) Init(container spi.IPMAASContainer) {
 	p.container = container
+	p.httpHandler.Init(container, &entityStoreAdapter{parent: p})
 }
 
 func (p *plugin) Start() {
@@ -93,6 +100,7 @@ func (p *plugin) handleDeviceUpdate(deviceId string, timestamp time.Time, traits
 }
 
 func (p *plugin) Stop() chan func() {
+	fmt.Printf("%T Stopping...\n", p)
 	p.cancelWorkers()
 	callbackCh := make(chan func())
 	go func() {
@@ -109,4 +117,12 @@ func (p *plugin) onWorkersStopped(callbackCh chan func()) {
 	//p.deregisterEntities()
 	close(callbackCh)
 
+}
+
+func (p *plugin) getStatusAndEntities() common.StatusAndEntities {
+	return common.StatusAndEntities{
+		Status: data.PluginStatus{
+			GoogleUser: p.googleUser,
+		},
+	}
 }

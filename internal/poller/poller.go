@@ -55,6 +55,13 @@ func (p *Poller) Run(ctx context.Context) {
 		}
 
 		p.sdmClient = sdmClient
+		userInfo, err := sdmClient.FetchUserInfo(ctx)
+
+		if err == nil {
+			fmt.Printf("Current user: %s\n", userInfo.Email)
+		} else {
+			fmt.Printf("Error retrieving user: %v\n", err)
+		}
 
 		ticker := time.NewTicker(time.Duration(p.intervalMinutes) * time.Minute)
 		defer ticker.Stop()

@@ -1,0 +1,4 @@
+.entity-nestthermostat-status {
+    display: flex;
+    flex-flow: column;
+}
