@@ -44,32 +44,35 @@ type Poller struct {
 func (p *Poller) Run(ctx context.Context) {
 	run := p.waitForTimer(ctx, time.NewTimer(time.Duration(p.initialDelaySeconds)*time.Second))
 
-	if run {
-		sdmClient, err := sdm.NewClient(ctx, p.sdmClientOptions)
+	if !run {
+		fmt.Print("Nest poller terminated\n")
+		return
+	}
 
-		if err != nil {
-			clientCreateError := fmt.Errorf("unable to create sdm client: %w", err)
-			p.err.Store(clientCreateError)
-			fmt.Printf("Poller failed: %v", clientCreateError)
-			return
-		}
+	sdmClient, err := sdm.NewClient(ctx, p.sdmClientOptions)
 
-		p.sdmClient = sdmClient
-		userInfo, err := sdmClient.FetchUserInfo(ctx)
+	if err != nil {
+		clientCreateError := fmt.Errorf("unable to create sdm client: %w", err)
+		p.err.Store(clientCreateError)
+		fmt.Printf("Poller failed: %v", clientCreateError)
+		return
+	}
 
-		if err == nil {
-			fmt.Printf("Current user: %s\n", userInfo.Email)
-		} else {
-			fmt.Printf("Error retrieving user: %v\n", err)
-		}
+	p.sdmClient = sdmClient
+	userInfo, err := sdmClient.FetchUserInfo(ctx)
 
-		ticker := time.NewTicker(time.Duration(p.intervalMinutes) * time.Minute)
-		defer ticker.Stop()
+	if err == nil {
+		fmt.Printf("Current user: %s\n", userInfo.Email)
+	} else {
+		fmt.Printf("Error retrieving user: %v\n", err)
+	}
 
-		for run {
-			p.poll(ctx)
-			run = p.waitForTick(ctx, ticker)
-		}
+	ticker := time.NewTicker(time.Duration(p.intervalMinutes) * time.Minute)
+	defer ticker.Stop()
+
+	for run {
+		p.poll(ctx)
+		run = p.waitForTick(ctx, ticker)
 	}
 
 	fmt.Print("Nest poller terminated\n")

@@ -79,12 +79,16 @@ func (s *Subscriber) Run(ctx context.Context) {
 	}()
 
 	subscription := client.Subscriber(s.options.SubscriptionId)
+
+	// Blocks until the context is canceled.
 	err = subscription.Receive(ctx, s.onMessageReceived)
 
 	if err != nil {
 		fmt.Printf("PubSub receive error: %v\n", err)
 		s.lastError.Store(fmt.Errorf("pubsub receive error: %w", err))
 	}
+
+	fmt.Printf("PubSub subscriber stopped\n")
 }
 
 func (s *Subscriber) onMessageReceived(ctx context.Context, msg *pubsub.Message) {
