@@ -16,7 +16,10 @@ import (
 	"github.com/avanha/pmaas-plugin-nestthermostat/internal/pubsub"
 	"github.com/avanha/pmaas-plugin-nestthermostat/internal/sdm"
 	"github.com/avanha/pmaas-spi"
+	"golang.org/x/oauth2"
+	"golang.org/x/oauth2/google"
 	"google.golang.org/api/googleapi"
+	smartdevicemanagement "google.golang.org/api/smartdevicemanagement/v1"
 )
 
 func NewPluginConfig() config.PluginConfig {
@@ -24,13 +27,14 @@ func NewPluginConfig() config.PluginConfig {
 }
 
 type plugin struct {
-	container     spi.IPMAASContainer
-	config        config.PluginConfig
-	httpHandler   *http.Handler
-	thermostats   map[string]*entities.NestThermostat
-	cancelWorkers context.CancelFunc
-	workersWg     sync.WaitGroup
-	googleUser    string
+	container         spi.IPMAASContainer
+	config            config.PluginConfig
+	httpHandler       *http.Handler
+	thermostats       map[string]*entities.NestThermostat
+	cancelWorkers     context.CancelFunc
+	workersWg         sync.WaitGroup
+	googleUser        string
+	oauthClientConfig *oauth2.Config
 }
 
 func NewPlugin(cfg config.PluginConfig) spi.IPMAASPlugin {
@@ -43,6 +47,12 @@ func NewPlugin(cfg config.PluginConfig) spi.IPMAASPlugin {
 
 func (p *plugin) Init(container spi.IPMAASContainer) {
 	p.container = container
+	oauthClientConfig, err := google.ConfigFromJSON(p.config.OAuthClientConfig, smartdevicemanagement.SdmServiceScope)
+	if err != nil {
+		fmt.Printf("%T Failed to create OAuth client config: %v", p, err)
+		return
+	}
+	p.oauthClientConfig = oauthClientConfig
 	p.httpHandler.Init(container, &entityStoreAdapter{parent: p})
 }
 
@@ -69,6 +79,7 @@ func (p *plugin) Start() {
 		deviceIds,
 		p.handleDeviceUpdate)
 	p.workersWg.Go(func() { subscriber.Run(ctx) })
+
 }
 
 func (p *plugin) handleDeviceList(devices []entities.NestThermostat) {

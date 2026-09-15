@@ -9,4 +9,5 @@ type PluginConfig struct {
 	RefreshToken         string   `json:"refreshToken"`
 	ThermostatIds        []string `json:"thermostatIds"`
 	ServiceAccountCreds  []byte
+	OAuthClientConfig    []byte
 }
