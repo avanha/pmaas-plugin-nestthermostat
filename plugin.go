@@ -45,9 +45,21 @@ type plugin struct {
 }
 
 type oauthAttempt struct {
-	state            string
-	verifier         string
-	exchangeCancelFn context.CancelFunc
+	state    string
+	verifier string
+	ctx      context.Context
+	cancelFn context.CancelFunc
+}
+
+func (a *oauthAttempt) cancel() bool {
+	cancelFn := a.cancelFn
+
+	if cancelFn == nil {
+		return false
+	}
+
+	cancelFn()
+	return true
 }
 
 func NewPlugin(cfg config.PluginConfig) spi.IPMAASPlugin {
@@ -62,8 +74,7 @@ func (p *plugin) Init(container spi.IPMAASContainer) {
 	p.container = container
 	oauthClientConfig, err := google.ConfigFromJSON(p.config.OAuthClientConfig, smartdevicemanagement.SdmServiceScope)
 	if err != nil {
-		fmt.Printf("%T Failed to create OAuth client config: %v", p, err)
-		return
+		panic(fmt.Errorf("%T Failed to create OAuth client config: %v", p, err))
 	}
 	p.oauthClientConfig = oauthClientConfig
 	p.httpHandler.Init(container, &entityStoreAdapter{parent: p})
@@ -126,9 +137,8 @@ func (p *plugin) handleDeviceUpdate(deviceId string, timestamp time.Time, traits
 func (p *plugin) Stop() chan func() {
 	fmt.Printf("%T Stopping...\n", p)
 
-	if p.oauthAttempt != nil && p.oauthAttempt.exchangeCancelFn != nil {
-		p.oauthAttempt.exchangeCancelFn()
-		p.oauthAttempt.exchangeCancelFn = nil
+	if p.oauthAttempt != nil && p.oauthAttempt.cancel() {
+		p.oauthAttempt = nil
 	}
 
 	p.cancelWorkers()
@@ -154,14 +164,15 @@ func (p *plugin) getStatusAndEntities() common.StatusAndEntities {
 	return common.StatusAndEntities{
 		Status: data.PluginStatus{
 			GoogleUser: p.googleUser,
-			AuthUri:    p.oauthClientConfig.AuthCodeURL("", oauth2.AccessTypeOffline),
 		},
 	}
 }
 
 func (p *plugin) prepareOAuthAttempt() (string, error) {
 	if p.oauthAttempt != nil {
-		return "", fmt.Errorf("oauth attempt already in progress")
+		fmt.Printf("Oauth attempt already in progress, cancelling and recreating")
+		p.oauthAttempt.cancel()
+		p.oauthAttempt = nil
 	}
 
 	// 1. Generate a high-entropy cryptographically random verifier string (43-128 chars)
@@ -178,41 +189,55 @@ func (p *plugin) prepareOAuthAttempt() (string, error) {
 		oauth2.AccessTypeOffline,
 		oauth2.S256ChallengeOption(challenge))
 
+	ctx, cancelFn := context.WithCancel(context.Background())
+
 	p.oauthAttempt = &oauthAttempt{
 		state:    state,
 		verifier: verifier,
+		ctx:      ctx,
+		cancelFn: cancelFn,
 	}
 
 	return authURL, nil
 }
 
 func (p *plugin) exchangeCodeForToken(url url.URL) error {
-	if p.oauthAttempt == nil {
+	attempt := p.oauthAttempt
+
+	if attempt == nil {
 		return fmt.Errorf("oauth attempt not initialized")
+	}
+
+	contextError := attempt.ctx.Err()
+
+	if contextError != nil {
+		return fmt.Errorf("oauth attempt context already canceled: %v", contextError)
 	}
 
 	state := url.Query().Get("state")
 
-	if state != p.oauthAttempt.state {
-		// CSRF mismatch
+	if state != attempt.state {
+		// CSRF mismatch.
+		// It also catches the case where a new attempt replaced the old one
+		// Don't cancel the attempt, since we don't know if this is the matching one.
+		// attempt.cancel()
+		// p.oauthAttempt = nil
 		return errors.New("invalid state")
 	}
 
 	code := url.Query().Get("code")
 
-	ctx, cancelFn := context.WithCancel(context.Background())
-	verifier := p.oauthAttempt.verifier
+	verifier := attempt.verifier
 	oauthClientConfig := p.oauthClientConfig
-	p.oauthAttempt.exchangeCancelFn = cancelFn
 
 	go func() {
-		defer cancelFn()
+		defer attempt.cancel()
 		token, err := oauthClientConfig.Exchange(
-			ctx,
+			attempt.ctx,
 			code,
 			oauth2.VerifierOption(verifier))
 
-		if ctx.Err() != nil {
+		if attempt.ctx.Err() != nil {
 			fmt.Printf("%T Token exchange completed, but context already canceled\n", p)
 			return
 		}
@@ -220,7 +245,7 @@ func (p *plugin) exchangeCodeForToken(url url.URL) error {
 		_, enqueueError := spi.ExecValueFunctionOnPluginGoRoutine(
 			p.container,
 			func() bool {
-				return p.onExchangeCodeForTokenComplete(token, err)
+				return p.onExchangeCodeForTokenComplete(attempt, token, err)
 			},
 			func() bool { return false },
 			"Failed to enqueue onExchangeCodeForTokenComplete callback")
@@ -233,8 +258,18 @@ func (p *plugin) exchangeCodeForToken(url url.URL) error {
 	return nil
 }
 
-func (p *plugin) onExchangeCodeForTokenComplete(token *oauth2.Token, err error) bool {
+func (p *plugin) onExchangeCodeForTokenComplete(attempt *oauthAttempt, token *oauth2.Token, err error) bool {
 	fmt.Printf("%T onExchangeCodeForTokenComplete, err=%v\n", p, err)
+
+	// Cancel the specific attempt no matter what since it's completing
+	attempt.cancel()
+
+	if attempt != p.oauthAttempt {
+		fmt.Printf("%T Ignoring stale oauth completion, attempt no longer current\n", p)
+		return false
+	}
+
+	// Since it's the current attempt, clear it from the plugin's state.
 	p.oauthAttempt = nil
 
 	if err != nil {
