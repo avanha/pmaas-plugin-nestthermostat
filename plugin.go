@@ -230,8 +230,7 @@ func (p *plugin) exchangeCodeForToken(url url.URL) error {
 	verifier := attempt.verifier
 	oauthClientConfig := p.oauthClientConfig
 
-	go func() {
-		defer attempt.cancel()
+	p.workersWg.Go(func() {
 		token, err := oauthClientConfig.Exchange(
 			attempt.ctx,
 			code,
@@ -253,7 +252,7 @@ func (p *plugin) exchangeCodeForToken(url url.URL) error {
 		if enqueueError != nil {
 			fmt.Printf("%T Failed to enqueue onExchangeCodeForTokenComplete callback: %v\n", p, enqueueError)
 		}
-	}()
+	})
 
 	return nil
 }
