@@ -2,10 +2,15 @@ package nestthermostat
 
 import (
 	"context"
+	"encoding/base64"
+	"errors"
 	"fmt"
 	"maps"
+	"net/url"
 	"sync"
 	"time"
+
+	"crypto/rand"
 
 	"github.com/avanha/pmaas-plugin-nestthermostat/config"
 	"github.com/avanha/pmaas-plugin-nestthermostat/data"
@@ -35,6 +40,14 @@ type plugin struct {
 	workersWg         sync.WaitGroup
 	googleUser        string
 	oauthClientConfig *oauth2.Config
+	oauthAttempt      *oauthAttempt
+	oauthClientToken  *oauth2.Token
+}
+
+type oauthAttempt struct {
+	state            string
+	verifier         string
+	exchangeCancelFn context.CancelFunc
 }
 
 func NewPlugin(cfg config.PluginConfig) spi.IPMAASPlugin {
@@ -112,7 +125,14 @@ func (p *plugin) handleDeviceUpdate(deviceId string, timestamp time.Time, traits
 
 func (p *plugin) Stop() chan func() {
 	fmt.Printf("%T Stopping...\n", p)
+
+	if p.oauthAttempt != nil && p.oauthAttempt.exchangeCancelFn != nil {
+		p.oauthAttempt.exchangeCancelFn()
+		p.oauthAttempt.exchangeCancelFn = nil
+	}
+
 	p.cancelWorkers()
+
 	callbackCh := make(chan func())
 	go func() {
 		fmt.Printf("%T Waiting for workers to finish...\n", p)
@@ -134,6 +154,105 @@ func (p *plugin) getStatusAndEntities() common.StatusAndEntities {
 	return common.StatusAndEntities{
 		Status: data.PluginStatus{
 			GoogleUser: p.googleUser,
+			AuthUri:    p.oauthClientConfig.AuthCodeURL("", oauth2.AccessTypeOffline),
 		},
 	}
+}
+
+func (p *plugin) prepareOAuthAttempt() (string, error) {
+	if p.oauthAttempt != nil {
+		return "", fmt.Errorf("oauth attempt already in progress")
+	}
+
+	// 1. Generate a high-entropy cryptographically random verifier string (43-128 chars)
+	verifier := oauth2.GenerateVerifier()
+
+	// 2. Derive the S256 challenge from the verifier
+	challenge := oauth2.S256ChallengeFromVerifier(verifier)
+
+	// 3. (Optional but recommended) Generate a random state token for CSRF protection
+	state := generateRandomState()
+
+	authURL := p.oauthClientConfig.AuthCodeURL(
+		state,
+		oauth2.AccessTypeOffline,
+		oauth2.S256ChallengeOption(challenge))
+
+	p.oauthAttempt = &oauthAttempt{
+		state:    state,
+		verifier: verifier,
+	}
+
+	return authURL, nil
+}
+
+func (p *plugin) exchangeCodeForToken(url url.URL) error {
+	if p.oauthAttempt == nil {
+		return fmt.Errorf("oauth attempt not initialized")
+	}
+
+	state := url.Query().Get("state")
+
+	if state != p.oauthAttempt.state {
+		// CSRF mismatch
+		return errors.New("invalid state")
+	}
+
+	code := url.Query().Get("code")
+
+	ctx, cancelFn := context.WithCancel(context.Background())
+	verifier := p.oauthAttempt.verifier
+	oauthClientConfig := p.oauthClientConfig
+	p.oauthAttempt.exchangeCancelFn = cancelFn
+
+	go func() {
+		defer cancelFn()
+		token, err := oauthClientConfig.Exchange(
+			ctx,
+			code,
+			oauth2.VerifierOption(verifier))
+
+		if ctx.Err() != nil {
+			fmt.Printf("%T Token exchange completed, but context already canceled\n", p)
+			return
+		}
+
+		_, enqueueError := spi.ExecValueFunctionOnPluginGoRoutine(
+			p.container,
+			func() bool {
+				return p.onExchangeCodeForTokenComplete(token, err)
+			},
+			func() bool { return false },
+			"Failed to enqueue onExchangeCodeForTokenComplete callback")
+
+		if enqueueError != nil {
+			fmt.Printf("%T Failed to enqueue onExchangeCodeForTokenComplete callback: %v\n", p, enqueueError)
+		}
+	}()
+
+	return nil
+}
+
+func (p *plugin) onExchangeCodeForTokenComplete(token *oauth2.Token, err error) bool {
+	fmt.Printf("%T onExchangeCodeForTokenComplete, err=%v\n", p, err)
+	p.oauthAttempt = nil
+
+	if err != nil {
+		return false
+	}
+
+	p.oauthClientToken = token
+
+	return true
+}
+
+// generateRandomState creates a cryptographically secure random string
+// suitable for use as an OAuth2 CSRF state token.
+func generateRandomState() string {
+	b := make([]byte, 32)
+
+	if _, err := rand.Read(b); err != nil {
+		panic(fmt.Errorf("failed to generate random state: %w", err))
+	}
+	return base64.RawURLEncoding.EncodeToString(b)
 }
