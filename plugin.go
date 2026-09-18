@@ -231,15 +231,20 @@ func (p *plugin) exchangeCodeForToken(url url.URL) error {
 	oauthClientConfig := p.oauthClientConfig
 
 	p.workersWg.Go(func() {
+		if attempt.ctx.Err() != nil {
+			fmt.Printf("%T Aborting auth code exchange, attempt already canceled\n", p)
+			return
+		}
+
+		// We want to cancel the context before this completes, regardless of the outcome.
+		// Generally, onExchangeCodeForTokenComplete will cancel and clear the attempt, but in case
+		// we can't actually enqueue the callback or it never runs, we want to at least cancel the attempt.
+		defer attempt.cancel()
+
 		token, err := oauthClientConfig.Exchange(
 			attempt.ctx,
 			code,
 			oauth2.VerifierOption(verifier))
-
-		if attempt.ctx.Err() != nil {
-			fmt.Printf("%T Token exchange completed, but context already canceled\n", p)
-			return
-		}
 
 		_, enqueueError := spi.ExecValueFunctionOnPluginGoRoutine(
 			p.container,
