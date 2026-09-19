@@ -37,7 +37,7 @@ func (h *Handler) Init(container spi.IPMAASContainer, entityStore common.EntityS
 	container.ProvideContentFS(&contentFS, "content")
 	container.EnableStaticContent("static")
 	container.AddRoute("/plugins/nestthermostat/", h.handleHttpListRequest)
-	container.AddRoute("/plugins/nestthermostat/oauthAttempt", h.handleHttpOAuthAttemptRequest)
+	//container.AddJSonRoute("/plugins/nestthermostat/oauthAttempt", h.handleHttpOAuthAttemptRequest)
 	container.RegisterEntityRenderer(
 		reflect.TypeOf((*data.PluginStatus)(nil)).Elem(),
 		h.statusDataRendererFactory)
@@ -74,7 +74,7 @@ func (h *Handler) handleHttpListRequest(writer http.ResponseWriter, request *htt
 }
 
 func (h *Handler) handleHttpOAuthAttemptRequest(writer http.ResponseWriter, request *http.Request) {
-	// TODO: Analayze this for vulnerabilities.
+	// TODO: Analyze this for vulnerabilities.
 	// All we're doing is generating a secure OAuth flow URI, but maybe it might worthwhile adding some
 	// CSRF protection.
 	if request.Method != http.MethodPost {
