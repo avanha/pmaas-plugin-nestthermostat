@@ -37,7 +37,10 @@ func (h *Handler) Init(container spi.IPMAASContainer, entityStore common.EntityS
 	container.ProvideContentFS(&contentFS, "content")
 	container.EnableStaticContent("static")
 	container.AddRoute("/plugins/nestthermostat/", h.handleHttpListRequest)
-	//container.AddJSonRoute("/plugins/nestthermostat/oauthAttempt", h.handleHttpOAuthAttemptRequest)
+	container.AddJsonRoute(
+		"/plugins/nestthermostat/oauthAttempt",
+		func() any { return nil },
+		h.handleHttpOAuthAttemptRequest)
 	container.RegisterEntityRenderer(
 		reflect.TypeOf((*data.PluginStatus)(nil)).Elem(),
 		h.statusDataRendererFactory)
@@ -73,30 +76,21 @@ func (h *Handler) handleHttpListRequest(writer http.ResponseWriter, request *htt
 		entityPointers)
 }
 
-func (h *Handler) handleHttpOAuthAttemptRequest(writer http.ResponseWriter, request *http.Request) {
+func (h *Handler) handleHttpOAuthAttemptRequest(_ http.ResponseWriter, r *http.Request, _ any) (any, error) {
 	// TODO: Analyze this for vulnerabilities.
 	// All we're doing is generating a secure OAuth flow URI, but maybe it might worthwhile adding some
 	// CSRF protection.
-	if request.Method != http.MethodPost {
-		writer.WriteHeader(http.StatusMethodNotAllowed)
-		return
+	if r.Method != http.MethodPost {
+		return nil, fmt.Errorf("method not allowed")
 	}
 
 	attempt, err := h.entityStore.GetOAuthAttempt()
 
 	if err != nil {
-		writer.WriteHeader(http.StatusInternalServerError)
-		_, _ = writer.Write([]byte(err.Error()))
-		return
+		return nil, err
 	}
 
-	writer.WriteHeader(http.StatusOK)
-	writer.Header().Set("Content-Type", "application/json")
-	_, err = writer.Write([]byte(fmt.Sprintf("{ \"uri\": \"%s\" }", attempt.AuthUri)))
-
-	if err != nil {
-		fmt.Printf("error writing response: %v\n", err)
-	}
+	return attempt, nil
 }
 
 func (h *Handler) statusDataRendererFactory() (spi.EntityRenderer, error) {
