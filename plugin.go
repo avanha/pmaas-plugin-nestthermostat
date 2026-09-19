@@ -168,7 +168,7 @@ func (p *plugin) getStatusAndEntities() common.StatusAndEntities {
 	}
 }
 
-func (p *plugin) prepareOAuthAttempt() (string, error) {
+func (p *plugin) prepareOAuthAttempt() common.OAuthAttemptOrError {
 	if p.oauthAttempt != nil {
 		fmt.Printf("Oauth attempt already in progress, cancelling and recreating")
 		p.oauthAttempt.cancel()
@@ -198,7 +198,9 @@ func (p *plugin) prepareOAuthAttempt() (string, error) {
 		cancelFn: cancelFn,
 	}
 
-	return authURL, nil
+	return common.OAuthAttemptOrError{
+		AuthUri: authURL,
+	}
 }
 
 func (p *plugin) exchangeCodeForToken(url url.URL) error {
