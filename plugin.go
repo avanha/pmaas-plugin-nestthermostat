@@ -76,6 +76,8 @@ func (p *plugin) Init(container spi.IPMAASContainer) {
 	if err != nil {
 		panic(fmt.Errorf("%T Failed to create OAuth client config: %v", p, err))
 	}
+	// TODO: Compose the url dynamically.
+	oauthClientConfig.RedirectURL = "http://localhost:8090/plugins/nestthermostat/oauthCallback"
 	p.oauthClientConfig = oauthClientConfig
 	p.httpHandler.Init(container, &entityStoreAdapter{parent: p})
 }
