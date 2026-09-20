@@ -9,7 +9,7 @@ class NestThermostatStatus {
         this.loginButton = null;
     }
 
-    onReadyStateChange = (event) => {
+    onReadyStateChange = () => {
         if (this.initIfReady()) {
             document.removeEventListener("readystatechange", this.onReadyStateChange);
         }
