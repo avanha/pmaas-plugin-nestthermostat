@@ -17,9 +17,10 @@ import (
 var contentFS embed.FS
 
 var statusTemplate = spi.TemplateInfo{
-	Name:   "nestthermostat_status",
-	Paths:  []string{"templates/nestthermostat_status.htmlt"},
-	Styles: []string{"css/nestthermostat_status.css"},
+	Name:    "nestthermostat_status",
+	Paths:   []string{"templates/nestthermostat_status.htmlt"},
+	Styles:  []string{"css/nestthermostat_status.css"},
+	Scripts: []string{"js/nestthermostat_status.js"},
 }
 
 type Handler struct {
