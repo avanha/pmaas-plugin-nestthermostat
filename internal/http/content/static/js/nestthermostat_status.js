@@ -32,7 +32,7 @@ class NestThermostatStatus {
         return true;
     }
 
-    onLoginButtonClick = (event) => {
+    onLoginButtonClick = () => {
         console.log("Login button clicked");
     }
 }
