@@ -38,6 +38,7 @@ func (h *Handler) Init(container spi.IPMAASContainer, entityStore common.EntityS
 	container.ProvideContentFS(&contentFS, "content")
 	container.EnableStaticContent("static")
 	container.AddRoute("/plugins/nestthermostat/", h.handleHttpListRequest)
+	container.AddRoute("/plugins/nestthermostat/oauthCallback", h.handleHttpOAuthCallbackRequest)
 	container.AddJsonRoute(
 		"/plugins/nestthermostat/oauthAttempt",
 		func() any { return nil },
@@ -92,6 +93,22 @@ func (h *Handler) handleHttpOAuthAttemptRequest(_ http.ResponseWriter, r *http.R
 	}
 
 	return attempt, nil
+}
+
+func (h *Handler) handleHttpOAuthCallbackRequest(w http.ResponseWriter, r *http.Request) {
+	errCh, err := h.entityStore.ProcessOAuthCallback(r.URL)
+
+	if err != nil {
+		http.Error(w, "unable to enqueue OAuth callback", http.StatusInternalServerError)
+		return
+	}
+
+	if err = <-errCh; err != nil {
+		http.Error(w, "unable to process OAuth callback", http.StatusInternalServerError)
+		return
+	}
+
+	http.Redirect(w, r, "/plugins/nestthermostat/", http.StatusFound)
 }
 
 func (h *Handler) statusDataRendererFactory() (spi.EntityRenderer, error) {

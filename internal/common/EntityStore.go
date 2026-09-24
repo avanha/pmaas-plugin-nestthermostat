@@ -1,6 +1,10 @@
 package common
 
-import "github.com/avanha/pmaas-plugin-nestthermostat/data"
+import (
+	"net/url"
+
+	"github.com/avanha/pmaas-plugin-nestthermostat/data"
+)
 
 type StatusAndEntities struct {
 	Status      data.PluginStatus
@@ -12,7 +16,12 @@ type OAuthAttemptOrError struct {
 	Error   error
 }
 
+type ErrorResult struct {
+	Error error
+}
+
 type EntityStore interface {
 	GetStatusAndEntities() (StatusAndEntities, error)
 	GetOAuthAttempt() (OAuthAttemptOrError, error)
+	ProcessOAuthCallback(url *url.URL) (<-chan error, error)
 }

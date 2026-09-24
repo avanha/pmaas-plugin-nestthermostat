@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"maps"
 	"net/url"
+	"reflect"
 	"sync"
 	"time"
 
@@ -42,6 +43,8 @@ type plugin struct {
 	oauthClientConfig *oauth2.Config
 	oauthAttempt      *oauthAttempt
 	oauthClientToken  *oauth2.Token
+	oauthClientScope  string
+	oauthRefreshToken string
 }
 
 type oauthAttempt struct {
@@ -78,8 +81,29 @@ func (p *plugin) Init(container spi.IPMAASContainer) {
 	}
 	// TODO: Compose the url dynamically.
 	oauthClientConfig.RedirectURL = "http://localhost:8090/plugins/nestthermostat/oauthCallback"
+	currentEndpoint := oauthClientConfig.Endpoint
+	oauthClientConfig.Endpoint = oauth2.Endpoint{
+		AuthURL:  fmt.Sprintf("https://nestservices.google.com/partnerconnections/%s/auth", p.config.SdmProjectId),
+		TokenURL: currentEndpoint.TokenURL,
+	}
 	p.oauthClientConfig = oauthClientConfig
 	p.httpHandler.Init(container, &entityStoreAdapter{parent: p})
+
+	persistentConfig, err := p.container.LoadConfig(func(typeName string) any {
+		v1Type := reflect.TypeFor[config.PersistentConfigV1]()
+		v1TypeName := v1Type.PkgPath() + "/" + v1Type.Name()
+
+		if typeName == v1TypeName {
+			return &config.PersistentConfigV1{}
+		}
+
+		return nil
+	})
+
+	if persistentConfig != nil {
+		persistentConfigV1 := persistentConfig.(*config.PersistentConfigV1)
+		p.oauthRefreshToken = persistentConfigV1.RefreshToken
+	}
 }
 
 func (p *plugin) Start() {
@@ -105,7 +129,6 @@ func (p *plugin) Start() {
 		deviceIds,
 		p.handleDeviceUpdate)
 	p.workersWg.Go(func() { subscriber.Run(ctx) })
-
 }
 
 func (p *plugin) handleDeviceList(devices []entities.NestThermostat) {
@@ -178,10 +201,10 @@ func (p *plugin) prepareOAuthAttempt() common.OAuthAttemptOrError {
 	}
 
 	// 1. Generate a high-entropy cryptographically random verifier string (43-128 chars)
-	verifier := oauth2.GenerateVerifier()
+	//verifier := oauth2.GenerateVerifier()
 
 	// 2. Derive the S256 challenge from the verifier
-	challenge := oauth2.S256ChallengeFromVerifier(verifier)
+	//challenge := oauth2.S256ChallengeFromVerifier(verifier)
 
 	// 3. (Optional but recommended) Generate a random state token for CSRF protection
 	state := generateRandomState()
@@ -189,13 +212,14 @@ func (p *plugin) prepareOAuthAttempt() common.OAuthAttemptOrError {
 	authURL := p.oauthClientConfig.AuthCodeURL(
 		state,
 		oauth2.AccessTypeOffline,
-		oauth2.S256ChallengeOption(challenge))
+		oauth2.ApprovalForce,
+		/*oauth2.S256ChallengeOption(challenge)*/)
 
 	ctx, cancelFn := context.WithCancel(context.Background())
 
 	p.oauthAttempt = &oauthAttempt{
-		state:    state,
-		verifier: verifier,
+		state: state,
+		//verifier: verifier,
 		ctx:      ctx,
 		cancelFn: cancelFn,
 	}
@@ -205,17 +229,22 @@ func (p *plugin) prepareOAuthAttempt() common.OAuthAttemptOrError {
 	}
 }
 
-func (p *plugin) exchangeCodeForToken(url url.URL) error {
+func (p *plugin) exchangeCodeForToken(url *url.URL) <-chan error {
+	resultCh := make(chan error, 1)
 	attempt := p.oauthAttempt
 
 	if attempt == nil {
-		return fmt.Errorf("oauth attempt not initialized")
+		resultCh <- fmt.Errorf("oauth attempt not initialized")
+		close(resultCh)
+		return resultCh
 	}
 
 	contextError := attempt.ctx.Err()
 
 	if contextError != nil {
-		return fmt.Errorf("oauth attempt context already canceled: %v", contextError)
+		resultCh <- fmt.Errorf("oauth attempt context already canceled: %v", contextError)
+		close(resultCh)
+		return resultCh
 	}
 
 	state := url.Query().Get("state")
@@ -226,47 +255,61 @@ func (p *plugin) exchangeCodeForToken(url url.URL) error {
 		// Don't cancel the attempt, since we don't know if this is the matching one.
 		// attempt.cancel()
 		// p.oauthAttempt = nil
-		return errors.New("invalid state")
+		resultCh <- errors.New("invalid state")
+		close(resultCh)
+		return resultCh
 	}
 
+	scope := url.Query().Get("scope")
 	code := url.Query().Get("code")
 
-	verifier := attempt.verifier
+	//verifier := attempt.verifier
 	oauthClientConfig := p.oauthClientConfig
 
 	p.workersWg.Go(func() {
+		defer close(resultCh)
+
 		if attempt.ctx.Err() != nil {
 			fmt.Printf("%T Aborting auth code exchange, attempt already canceled\n", p)
+			resultCh <- fmt.Errorf("oauth attempt context already canceled")
 			return
 		}
 
 		// We want to cancel the context before this completes, regardless of the outcome.
 		// Generally, onExchangeCodeForTokenComplete will cancel and clear the attempt, but in case
-		// we can't actually enqueue the callback or it never runs, we want to at least cancel the attempt.
+		// we can't actually enqueue the callback, or it never runs, we want to at least cancel the attempt.
 		defer attempt.cancel()
+
+		fmt.Printf("Redirect for exchange is: %s\n", oauthClientConfig.RedirectURL)
 
 		token, err := oauthClientConfig.Exchange(
 			attempt.ctx,
 			code,
-			oauth2.VerifierOption(verifier))
+			/*oauth2.VerifierOption(verifier)*/)
 
-		_, enqueueError := spi.ExecValueFunctionOnPluginGoRoutine(
+		completionError, enqueueError := spi.ExecValueFunctionOnPluginGoRoutine(
 			p.container,
-			func() bool {
-				return p.onExchangeCodeForTokenComplete(attempt, token, err)
+			func() error {
+				return p.onExchangeCodeForTokenComplete(attempt, token, scope, err)
 			},
-			func() bool { return false },
+			func() error { return nil },
 			"Failed to enqueue onExchangeCodeForTokenComplete callback")
 
 		if enqueueError != nil {
 			fmt.Printf("%T Failed to enqueue onExchangeCodeForTokenComplete callback: %v\n", p, enqueueError)
+			resultCh <- fmt.Errorf("failed to enqueue onExchangeCodeForTokenComplete callback: %v", enqueueError)
+		}
+
+		if completionError != nil {
+			resultCh <- err
 		}
 	})
 
-	return nil
+	return resultCh
 }
 
-func (p *plugin) onExchangeCodeForTokenComplete(attempt *oauthAttempt, token *oauth2.Token, err error) bool {
+func (p *plugin) onExchangeCodeForTokenComplete(attempt *oauthAttempt, token *oauth2.Token,
+	scope string, err error) error {
 	fmt.Printf("%T onExchangeCodeForTokenComplete, err=%v\n", p, err)
 
 	// Cancel the specific attempt no matter what since it's completing
@@ -274,19 +317,31 @@ func (p *plugin) onExchangeCodeForTokenComplete(attempt *oauthAttempt, token *oa
 
 	if attempt != p.oauthAttempt {
 		fmt.Printf("%T Ignoring stale oauth completion, attempt no longer current\n", p)
-		return false
+		return fmt.Errorf("onExchangeCodeForTokenComplete failed, attempt no longer current")
 	}
 
 	// Since it's the current attempt, clear it from the plugin's state.
 	p.oauthAttempt = nil
 
 	if err != nil {
-		return false
+		return fmt.Errorf("onExchangeCodeForTokenComplete failed, code exchange failed, err=%v", err)
 	}
 
 	p.oauthClientToken = token
+	p.oauthRefreshToken = token.RefreshToken
+	p.oauthClientScope = scope
 
-	return true
+	p.saveConfig()
+
+	return nil
+}
+
+func (p *plugin) saveConfig() {
+	persistentConfig := config.PersistentConfigV1{
+		RefreshToken: p.oauthClientToken.RefreshToken,
+	}
+
+	_ = p.container.SaveConfig(persistentConfig)
 }
 
 // generateRandomState creates a cryptographically secure random string

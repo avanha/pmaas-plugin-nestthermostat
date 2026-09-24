@@ -1,6 +1,8 @@
 package nestthermostat
 
 import (
+	"net/url"
+
 	"github.com/avanha/pmaas-plugin-nestthermostat/internal/common"
 	spi "github.com/avanha/pmaas-spi"
 )
@@ -27,4 +29,14 @@ func (e *entityStoreAdapter) GetOAuthAttempt() (common.OAuthAttemptOrError, erro
 		e.parent.prepareOAuthAttempt,
 		func() common.OAuthAttemptOrError { return common.OAuthAttemptOrError{} },
 		"unable to prepare OAuth attempt")
+}
+
+func (e *entityStoreAdapter) ProcessOAuthCallback(url *url.URL) (<-chan error, error) {
+	// HTTP requests come in on arbitrary goroutines, so execute getStatusAndEntities on the
+	// main plugin goroutine
+	return spi.ExecValueFunctionOnPluginGoRoutine(
+		e.parent.container,
+		func() <-chan error { return e.parent.exchangeCodeForToken(url) },
+		func() <-chan error { return nil },
+		"unable to process OAuth callback")
 }
