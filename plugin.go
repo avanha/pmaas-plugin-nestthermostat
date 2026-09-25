@@ -21,7 +21,7 @@ import (
 	poller2 "github.com/avanha/pmaas-plugin-nestthermostat/internal/poller"
 	"github.com/avanha/pmaas-plugin-nestthermostat/internal/pubsub"
 	"github.com/avanha/pmaas-plugin-nestthermostat/internal/sdm"
-	"github.com/avanha/pmaas-spi"
+	spi "github.com/avanha/pmaas-spi"
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/google"
 	"google.golang.org/api/googleapi"
@@ -200,26 +200,20 @@ func (p *plugin) prepareOAuthAttempt() common.OAuthAttemptOrError {
 		p.oauthAttempt = nil
 	}
 
-	// 1. Generate a high-entropy cryptographically random verifier string (43-128 chars)
-	//verifier := oauth2.GenerateVerifier()
+	// Note: The token flow for Nest/SDM doesn't support PKCE, so it's omitted here.
 
-	// 2. Derive the S256 challenge from the verifier
-	//challenge := oauth2.S256ChallengeFromVerifier(verifier)
-
-	// 3. (Optional but recommended) Generate a random state token for CSRF protection
 	state := generateRandomState()
 
+	// Set ApprovalForce to ensure the user is prompted
 	authURL := p.oauthClientConfig.AuthCodeURL(
 		state,
 		oauth2.AccessTypeOffline,
-		oauth2.ApprovalForce,
-		/*oauth2.S256ChallengeOption(challenge)*/)
+		oauth2.ApprovalForce)
 
 	ctx, cancelFn := context.WithCancel(context.Background())
 
 	p.oauthAttempt = &oauthAttempt{
-		state: state,
-		//verifier: verifier,
+		state:    state,
 		ctx:      ctx,
 		cancelFn: cancelFn,
 	}
@@ -263,7 +257,6 @@ func (p *plugin) exchangeCodeForToken(url *url.URL) <-chan error {
 	scope := url.Query().Get("scope")
 	code := url.Query().Get("code")
 
-	//verifier := attempt.verifier
 	oauthClientConfig := p.oauthClientConfig
 
 	p.workersWg.Go(func() {
@@ -284,8 +277,7 @@ func (p *plugin) exchangeCodeForToken(url *url.URL) <-chan error {
 
 		token, err := oauthClientConfig.Exchange(
 			attempt.ctx,
-			code,
-			/*oauth2.VerifierOption(verifier)*/)
+			code)
 
 		completionError, enqueueError := spi.ExecValueFunctionOnPluginGoRoutine(
 			p.container,
