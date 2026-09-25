@@ -38,7 +38,7 @@ func (h *Handler) Init(container spi.IPMAASContainer, entityStore common.EntityS
 	container.ProvideContentFS(&contentFS, "content")
 	container.EnableStaticContent("static")
 	container.AddRoute("/plugins/nestthermostat/", h.handleHttpListRequest)
-	container.AddRoute("/plugins/nestthermostat/oauthCallback", h.handleHttpOAuthCallbackRequest)
+	container.AddRoute(common.OAuthCallbackPath, h.handleHttpOAuthCallbackRequest)
 	container.AddJsonRoute(
 		"/plugins/nestthermostat/oauthAttempt",
 		func() any { return nil },
@@ -86,7 +86,16 @@ func (h *Handler) handleHttpOAuthAttemptRequest(_ http.ResponseWriter, r *http.R
 		return nil, fmt.Errorf("method not allowed")
 	}
 
-	attempt, err := h.entityStore.GetOAuthAttempt()
+	// Resolved here, on the request's own goroutine, rather than passed through to the plugin's
+	// actor goroutine as a *http.Request: GetBaseUrl only needs the Host header and server config, and
+	// this keeps the request object itself from ever crossing the actor boundary.
+	baseUrl, err := h.container.GetBaseUrl(r)
+
+	if err != nil {
+		return nil, err
+	}
+
+	attempt, err := h.entityStore.GetOAuthAttempt(baseUrl)
 
 	if err != nil {
 		return nil, err

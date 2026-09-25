@@ -21,12 +21,12 @@ func (e *entityStoreAdapter) GetStatusAndEntities() (common.StatusAndEntities, e
 		"unable to get status and entities")
 }
 
-func (e *entityStoreAdapter) GetOAuthAttempt() (common.OAuthAttemptOrError, error) {
+func (e *entityStoreAdapter) GetOAuthAttempt(baseUrl string) (common.OAuthAttemptOrError, error) {
 	// HTTP requests come in on arbitrary goroutines, so execute getStatusAndEntities on the
 	// main plugin goroutine
 	return spi.ExecValueFunctionOnPluginGoRoutine(
 		e.parent.container,
-		e.parent.prepareOAuthAttempt,
+		func() common.OAuthAttemptOrError { return e.parent.prepareOAuthAttempt(baseUrl) },
 		func() common.OAuthAttemptOrError { return common.OAuthAttemptOrError{} },
 		"unable to prepare OAuth attempt")
 }

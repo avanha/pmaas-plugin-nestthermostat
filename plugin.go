@@ -8,6 +8,7 @@ import (
 	"maps"
 	"net/url"
 	"reflect"
+	"strings"
 	"sync"
 	"time"
 
@@ -48,10 +49,13 @@ type plugin struct {
 }
 
 type oauthAttempt struct {
-	state    string
-	verifier string
-	ctx      context.Context
-	cancelFn context.CancelFunc
+	state string
+	// oauthConfig is a per-attempt copy of the plugin's oauth2.Config with RedirectURL resolved from
+	// the request that started this attempt. It's reused verbatim for both AuthCodeURL and Exchange,
+	// since OAuth requires the redirect_uri to match exactly between the two steps.
+	oauthConfig *oauth2.Config
+	ctx         context.Context
+	cancelFn    context.CancelFunc
 }
 
 func (a *oauthAttempt) cancel() bool {
@@ -79,8 +83,9 @@ func (p *plugin) Init(container spi.IPMAASContainer) {
 	if err != nil {
 		panic(fmt.Errorf("%T Failed to create OAuth client config: %v", p, err))
 	}
-	// TODO: Compose the url dynamically.
-	oauthClientConfig.RedirectURL = "http://localhost:8090/plugins/nestthermostat/oauthCallback"
+	// RedirectURL is intentionally left unset here: it's resolved per-attempt in prepareOAuthAttempt
+	// from the server's configured base URLs (via container.GetBaseUrl), since it depends on which of
+	// possibly several externally-reachable hostnames the initiating request arrived on.
 	currentEndpoint := oauthClientConfig.Endpoint
 	oauthClientConfig.Endpoint = oauth2.Endpoint{
 		AuthURL:  fmt.Sprintf("https://nestservices.google.com/partnerconnections/%s/auth", p.config.SdmProjectId),
@@ -193,7 +198,7 @@ func (p *plugin) getStatusAndEntities() common.StatusAndEntities {
 	}
 }
 
-func (p *plugin) prepareOAuthAttempt() common.OAuthAttemptOrError {
+func (p *plugin) prepareOAuthAttempt(baseUrl string) common.OAuthAttemptOrError {
 	if p.oauthAttempt != nil {
 		fmt.Printf("Oauth attempt already in progress, cancelling and recreating")
 		p.oauthAttempt.cancel()
@@ -202,10 +207,15 @@ func (p *plugin) prepareOAuthAttempt() common.OAuthAttemptOrError {
 
 	// Note: The token flow for Nest/SDM doesn't support PKCE, so it's omitted here.
 
+	// Copy the template config so this attempt's RedirectURL doesn't leak into other attempts or
+	// concurrent access to p.oauthClientConfig.
+	oauthConfig := *p.oauthClientConfig
+	oauthConfig.RedirectURL = strings.TrimSuffix(baseUrl, "/") + common.OAuthCallbackPath
+
 	state := generateRandomState()
 
 	// Set ApprovalForce to ensure the user is prompted
-	authURL := p.oauthClientConfig.AuthCodeURL(
+	authURL := oauthConfig.AuthCodeURL(
 		state,
 		oauth2.AccessTypeOffline,
 		oauth2.ApprovalForce)
@@ -213,9 +223,10 @@ func (p *plugin) prepareOAuthAttempt() common.OAuthAttemptOrError {
 	ctx, cancelFn := context.WithCancel(context.Background())
 
 	p.oauthAttempt = &oauthAttempt{
-		state:    state,
-		ctx:      ctx,
-		cancelFn: cancelFn,
+		state:       state,
+		oauthConfig: &oauthConfig,
+		ctx:         ctx,
+		cancelFn:    cancelFn,
 	}
 
 	return common.OAuthAttemptOrError{
@@ -257,7 +268,9 @@ func (p *plugin) exchangeCodeForToken(url *url.URL) <-chan error {
 	scope := url.Query().Get("scope")
 	code := url.Query().Get("code")
 
-	oauthClientConfig := p.oauthClientConfig
+	// Use the same per-attempt config (and thus the same RedirectURL) that built the auth URL, since
+	// OAuth requires redirect_uri to match exactly between the authorization and token requests.
+	oauthClientConfig := attempt.oauthConfig
 
 	p.workersWg.Go(func() {
 		defer close(resultCh)
