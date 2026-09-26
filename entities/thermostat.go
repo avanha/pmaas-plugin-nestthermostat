@@ -15,6 +15,7 @@ type NestThermostatData struct {
 	Temperature    float32
 	Humidity       float32
 	HvacStatus     string
+	Mode           string
 	EcoMode        string
 	HeatSetpoint   float32
 	CoolSetpoint   float32
@@ -32,10 +33,15 @@ type NestThermostat struct {
 	// against one whole-entity timestamp would let an update to one trait wrongly discard an equally
 	// legitimate, individually-still-current update previously received for another. See
 	// sdm.ApplyTraits, which is what actually calls Set on these.
-	Name         lww.Register[string]
-	Temperature  lww.Register[float32]
-	Humidity     lww.Register[float32]
-	HvacStatus   lww.Register[string]
+	Name        lww.Register[string]
+	Temperature lww.Register[float32]
+	Humidity    lww.Register[float32]
+	HvacStatus  lww.Register[string]
+	// Mode is the thermostat's configured mode (HEAT/COOL/HEATCOOL/OFF, from
+	// sdm.devices.traits.ThermostatMode) — independent of HvacStatus, which reflects whether it's
+	// actually running right now. A HEATCOOL-mode thermostat has both setpoints meaningful at once,
+	// regardless of HvacStatus.
+	Mode         lww.Register[string]
 	EcoMode      lww.Register[string]
 	HeatSetpoint lww.Register[float32]
 	CoolSetpoint lww.Register[float32]
@@ -72,6 +78,7 @@ func (t *NestThermostat) LastUpdateTime() time.Time {
 		t.Temperature.UpdateTime,
 		t.Humidity.UpdateTime,
 		t.HvacStatus.UpdateTime,
+		t.Mode.UpdateTime,
 		t.EcoMode.UpdateTime,
 		t.HeatSetpoint.UpdateTime,
 		t.CoolSetpoint.UpdateTime,
@@ -104,6 +111,7 @@ func (t *NestThermostat) Data() tracking.DataSample {
 			Temperature:    t.Temperature.Value,
 			Humidity:       t.Humidity.Value,
 			HvacStatus:     t.HvacStatus.Value,
+			Mode:           t.Mode.Value,
 			EcoMode:        t.EcoMode.Value,
 			HeatSetpoint:   t.HeatSetpoint.Value,
 			CoolSetpoint:   t.CoolSetpoint.Value,
@@ -126,6 +134,7 @@ func (t *NestThermostat) GetThermostatData() environment.Thermostat {
 			LastUpdateTime: t.LastUpdateTime(),
 		},
 		HvacStatus:     t.HvacStatus.Value,
+		Mode:           t.Mode.Value,
 		EcoMode:        t.EcoMode.Value,
 		HeatSetpoint:   t.HeatSetpoint.Value,
 		CoolSetpoint:   t.CoolSetpoint.Value,
@@ -135,5 +144,5 @@ func (t *NestThermostat) GetThermostatData() environment.Thermostat {
 
 func NestThermostatDataToInsertArgs(anyData *any) ([]any, error) {
 	d := (*anyData).(NestThermostatData)
-	return []any{d.Temperature, d.Humidity, d.HvacStatus, d.EcoMode, d.HeatSetpoint, d.CoolSetpoint, d.LastUpdateTime}, nil
+	return []any{d.Temperature, d.Humidity, d.HvacStatus, d.Mode, d.EcoMode, d.HeatSetpoint, d.CoolSetpoint, d.LastUpdateTime}, nil
 }

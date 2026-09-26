@@ -38,6 +38,7 @@ type Traits struct {
 	Temperature                   *TemperatureTrait                   `json:"sdm.devices.traits.Temperature,omitempty"`
 	Humidity                      *HumidityTrait                      `json:"sdm.devices.traits.Humidity,omitempty"`
 	ThermostatHvac                *ThermostatHvacTrait                `json:"sdm.devices.traits.ThermostatHvac,omitempty"`
+	ThermostatMode                *ThermostatModeTrait                `json:"sdm.devices.traits.ThermostatMode,omitempty"`
 	ThermostatEco                 *ThermostatEcoTrait                 `json:"sdm.devices.traits.ThermostatEco,omitempty"`
 	ThermostatTemperatureSetpoint *ThermostatTemperatureSetpointTrait `json:"sdm.devices.traits.ThermostatTemperatureSetpoint,omitempty"`
 
@@ -61,9 +62,18 @@ type HumidityTrait struct {
 	AmbientHumidityPercent float32 `json:"ambientHumidityPercent"`
 }
 
-// ThermostatHvacTrait's Status is one of "OFF", "HEATING", "COOLING".
+// ThermostatHvacTrait's Status reflects what the system is actually doing right now — one of "OFF",
+// "HEATING", "COOLING" — as distinct from ThermostatModeTrait, which is the configured mode
+// (independent of whether it's currently running).
 type ThermostatHvacTrait struct {
 	Status string `json:"status"`
+}
+
+// ThermostatModeTrait's Mode is the thermostat's configured mode: one of "HEAT", "COOL", "HEATCOOL",
+// "OFF". A HEATCOOL-mode thermostat has both a heat and a cool setpoint meaningful at once, regardless
+// of whether ThermostatHvacTrait.Status currently shows it actively running either one.
+type ThermostatModeTrait struct {
+	Mode string `json:"mode"`
 }
 
 // ThermostatEcoTrait's Mode is one of "MANUAL_ECO", "OFF".
@@ -162,6 +172,12 @@ func ApplyTraits(t *entities.NestThermostat, timestamp time.Time, traits *Traits
 				return "", false
 			}
 			return traits.ThermostatHvac.Status, true
+		}},
+		traitField[string]{&t.Mode, func(traits *Traits) (string, bool) {
+			if traits.ThermostatMode == nil {
+				return "", false
+			}
+			return traits.ThermostatMode.Mode, true
 		}},
 		traitField[string]{&t.EcoMode, func(traits *Traits) (string, bool) {
 			if traits.ThermostatEco == nil {
