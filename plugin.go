@@ -14,6 +14,7 @@ import (
 
 	"crypto/rand"
 
+	"github.com/avanha/pmaas-common/mailbox"
 	"github.com/avanha/pmaas-plugin-nestthermostat/config"
 	"github.com/avanha/pmaas-plugin-nestthermostat/data"
 	"github.com/avanha/pmaas-plugin-nestthermostat/entities"
@@ -33,6 +34,10 @@ func NewPluginConfig() config.PluginConfig {
 	return config.PluginConfig{}
 }
 
+// saveQueueStopTimeout bounds how long Stop waits for a pending persistent-config save to finish
+// writing to disk before giving up on waiting for it.
+const saveQueueStopTimeout = 5 * time.Second
+
 type plugin struct {
 	container         spi.IPMAASContainer
 	config            config.PluginConfig
@@ -46,6 +51,11 @@ type plugin struct {
 	oauthClientToken  *oauth2.Token
 	oauthClientScope  string
 	oauthRefreshToken string
+
+	// saveQueue persists the latest persistent config off the plugin's own mailbox goroutine, so a
+	// slow disk write never blocks it. Only the most recent save matters, so a queued-but-not-yet-
+	// started save is discarded and replaced whenever a newer one is sent, rather than run in order.
+	saveQueue *mailbox.ConflatingMailbox
 }
 
 type oauthAttempt struct {
@@ -79,6 +89,8 @@ func NewPlugin(cfg config.PluginConfig) spi.IPMAASPlugin {
 
 func (p *plugin) Init(container spi.IPMAASContainer) {
 	p.container = container
+	p.saveQueue = mailbox.NewConflatingMailbox()
+
 	oauthClientConfig, err := google.ConfigFromJSON(p.config.OAuthClientConfig, smartdevicemanagement.SdmServiceScope)
 	if err != nil {
 		panic(fmt.Errorf("%T Failed to create OAuth client config: %v", p, err))
@@ -177,6 +189,15 @@ func (p *plugin) Stop() chan func() {
 	go func() {
 		fmt.Printf("%T Waiting for workers to finish...\n", p)
 		p.workersWg.Wait()
+
+		fmt.Printf("%T Waiting for pending config save to complete...\n", p)
+		saveCtx, cancelSaveCtx := context.WithTimeout(context.Background(), saveQueueStopTimeout)
+		defer cancelSaveCtx()
+
+		if err := p.saveQueue.Stop(saveCtx); err != nil {
+			fmt.Printf("%T Timed out waiting for pending config save: %v\n", p, err)
+		}
+
 		callbackCh <- func() { p.onWorkersStopped(callbackCh) }
 	}()
 
@@ -341,12 +362,28 @@ func (p *plugin) onExchangeCodeForTokenComplete(attempt *oauthAttempt, token *oa
 	return nil
 }
 
+// saveConfig builds a snapshot of the current persistent config on the plugin's own mailbox goroutine
+// (so it's always internally consistent), then hands the actual disk write off to saveQueue. That
+// keeps the write itself off the mailbox, and since only the most recent snapshot is ever worth
+// persisting, an earlier save still queued when a newer one arrives is simply discarded in favor of it.
 func (p *plugin) saveConfig() {
 	persistentConfig := config.PersistentConfigV1{
-		RefreshToken: p.oauthClientToken.RefreshToken,
+		AccessToken:               p.oauthClientToken.AccessToken,
+		AccessTokenType:           p.oauthClientToken.TokenType,
+		AccessTokenExpirationTime: p.oauthClientToken.Expiry,
+		AccessTokenScopes:         []string{p.oauthClientScope},
+		RefreshToken:              p.oauthClientToken.RefreshToken,
 	}
 
-	_ = p.container.SaveConfig(persistentConfig)
+	err := p.saveQueue.Send(func() {
+		if err := p.container.SaveConfig(persistentConfig); err != nil {
+			fmt.Printf("%T Failed to save persistent config: %v\n", p, err)
+		}
+	})
+
+	if err != nil {
+		fmt.Printf("%T Failed to enqueue persistent config save: %v\n", p, err)
+	}
 }
 
 // generateRandomState creates a cryptographically secure random string

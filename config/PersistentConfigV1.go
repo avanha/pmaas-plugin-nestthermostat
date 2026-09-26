@@ -1,5 +1,11 @@
 package config
 
+import "time"
+
 type PersistentConfigV1 struct {
-	RefreshToken string
+	AccessToken               string
+	AccessTokenExpirationTime time.Time
+	AccessTokenScopes         []string
+	AccessTokenType           string
+	RefreshToken              string
 }
