@@ -43,15 +43,23 @@ type NestThermostat struct {
 	// PmaasEntityId is the id returned by IPMAASContainer.RegisterEntity once this thermostat has been
 	// registered. Empty until then.
 	PmaasEntityId string
+
+	// NameLocked is true when the name came from local configuration rather than device telemetry. A
+	// locked name is never overwritten by sdm.ApplyTraits, regardless of how new an incoming Info trait
+	// update is — the user's own configured name always wins over whatever the device itself reports.
+	NameLocked bool
 }
 
 // NewNestThermostat creates a thermostat with the given id and an initial name, before any trait data
 // has been applied to it (e.g. a device only pre-registered from configuration, or one just discovered
-// by a poll before sdm.ApplyTraits has run against it).
-func NewNestThermostat(id string, name string) *NestThermostat {
+// by a poll before sdm.ApplyTraits has run against it). nameLocked should be true only when name came
+// from local configuration; a placeholder or device-default name must always be unlocked, so a real
+// name from telemetry can still take over.
+func NewNestThermostat(id string, name string, nameLocked bool) *NestThermostat {
 	return &NestThermostat{
-		Id:   id,
-		Name: lww.Register[string]{Value: name},
+		Id:         id,
+		Name:       lww.Register[string]{Value: name},
+		NameLocked: nameLocked,
 	}
 }
 

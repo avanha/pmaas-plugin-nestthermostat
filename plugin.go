@@ -23,8 +23,8 @@ import (
 	"github.com/avanha/pmaas-plugin-nestthermostat/internal/pubsub"
 	"github.com/avanha/pmaas-plugin-nestthermostat/internal/sdm"
 	spi "github.com/avanha/pmaas-spi"
+	"github.com/avanha/pmaas-spi/environment"
 	"github.com/avanha/pmaas-spi/events"
-	"github.com/avanha/pmaas-spi/tracking"
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/google"
 	"google.golang.org/api/googleapi"
@@ -39,19 +39,28 @@ func NewPluginConfig() config.PluginConfig {
 // writing to disk before giving up on waiting for it.
 const saveQueueStopTimeout = 5 * time.Second
 
+// IThermostatType is used as the entityType when registering thermostats, so the environment plugin
+// (which checks a registered entity's type for assignability to environment.IThermostat) can pick them
+// up. Computed locally rather than exported from pmaas-spi/environment, matching how the bluetooth
+// plugin computes its own IWirelessThermometerType for the same purpose.
+var IThermostatType = reflect.TypeOf((*environment.IThermostat)(nil)).Elem()
+
 type plugin struct {
-	container         spi.IPMAASContainer
-	config            config.PluginConfig
-	httpHandler       *http.Handler
-	thermostats       map[string]*entities.NestThermostat
-	cancelWorkers     context.CancelFunc
-	workersWg         sync.WaitGroup
-	googleUser        string
-	oauthClientConfig *oauth2.Config
-	oauthAttempt      *oauthAttempt
-	oauthClientToken  *oauth2.Token
-	oauthClientScope  string
-	oauthRefreshToken string
+	container   spi.IPMAASContainer
+	config      config.PluginConfig
+	httpHandler *http.Handler
+	thermostats map[string]*entities.NestThermostat
+	// anonymousThermostatCounter generates unique suffixes for placeholder thermostat names (see
+	// nextPlaceholderThermostatName). Only ever touched on the plugin's own mailbox goroutine.
+	anonymousThermostatCounter int
+	cancelWorkers              context.CancelFunc
+	workersWg                  sync.WaitGroup
+	googleUser                 string
+	oauthClientConfig          *oauth2.Config
+	oauthAttempt               *oauthAttempt
+	oauthClientToken           *oauth2.Token
+	oauthClientScope           string
+	oauthRefreshToken          string
 
 	// saveQueue persists the latest persistent config off the plugin's own mailbox goroutine, so a
 	// slow disk write never blocks it. Only the most recent save matters, so a queued-but-not-yet-
@@ -174,8 +183,23 @@ func (p *plugin) registerPreconfiguredThermostats() {
 			continue
 		}
 
-		p.registerNewThermostat(entities.NewNestThermostat(thermostat.ID, thermostat.Name))
+		name := thermostat.Name
+		nameLocked := name != ""
+
+		if !nameLocked {
+			name = p.nextPlaceholderThermostatName()
+		}
+
+		p.registerNewThermostat(entities.NewNestThermostat(thermostat.ID, name, nameLocked))
 	}
+}
+
+// nextPlaceholderThermostatName returns a unique display name for a thermostat that has neither a
+// configured name nor, yet, a name reported by the device itself. The placeholder is never locked (see
+// entities.NestThermostat.NameLocked), so a real name from telemetry replaces it as soon as one arrives.
+func (p *plugin) nextPlaceholderThermostatName() string {
+	p.anonymousThermostatCounter++
+	return fmt.Sprintf("Nest Thermostat %d", p.anonymousThermostatCounter)
 }
 
 // currentRefreshToken returns the plugin's current OAuth refresh token. It's safe to call from any
@@ -206,9 +230,19 @@ func (p *plugin) handleDeviceList(fetchTime time.Time, devices []sdm.DeviceTrait
 		existing, known := p.thermostats[device.Id]
 
 		if !known {
-			t := entities.NewNestThermostat(device.Id, "Nest Thermostat")
-			sdm.ApplyTraits(t, fetchTime, device.Traits)
+			t := entities.NewNestThermostat(device.Id, p.nextPlaceholderThermostatName(), false)
+			applied := sdm.ApplyTraits(t, fetchTime, device.Traits)
+
 			p.registerNewThermostat(t)
+
+			// Registration only announces id/name/type — it carries no state payload, so without this,
+			// whatever traits this same poll response just applied to t would sit unreported until some
+			// later poll or pubsub message happened to trigger a broadcast (up to an hour away, given the
+			// poller's interval). t.PmaasEntityId is only set once registration actually succeeds.
+			if applied && t.PmaasEntityId != "" {
+				p.broadcastThermostatStateChanged(t)
+			}
+
 			continue
 		}
 
@@ -219,16 +253,19 @@ func (p *plugin) handleDeviceList(fetchTime time.Time, devices []sdm.DeviceTrait
 }
 
 // registerNewThermostat registers t as a new entity and, once that succeeds, starts tracking it in
-// p.thermostats. t is stored by pointer and mutated in place by later updates, since the entity's stub
-// (and anything that captured a reference to it via the stub) keeps pointing at this exact instance.
+// p.thermostats. It's registered as an environment.IThermostat — advertising the capability, not a
+// directly-trackable entity in its own right — so the environment plugin can pick it up and re-host it
+// as a tracked, renderable entity, the same way it does for wireless thermometers advertised by the
+// bluetooth plugin. That's also why no stub factory is supplied here (nil, like bluetooth's own raw
+// device registration): nothing calls back into this specific entity directly, since the environment
+// plugin's re-hosted copy operates purely off the values already carried in the registration/state-
+// change events themselves.
 func (p *plugin) registerNewThermostat(t *entities.NestThermostat) {
-	stub := entities.NewStub(p.container, t)
-
 	pmaasEntityId, err := p.container.RegisterEntity(
 		t.Id,
-		tracking.TrackableType,
+		IThermostatType,
 		t.Name.Value,
-		func() (any, error) { return stub, nil })
+		nil)
 
 	if err != nil {
 		fmt.Printf("%T Failed to register entity for thermostat %s: %v\n", p, t.Id, err)
@@ -245,7 +282,7 @@ func (p *plugin) broadcastThermostatStateChanged(t *entities.NestThermostat) {
 	event := events.EntityStateChangedEvent{
 		EntityEvent: events.EntityEvent{
 			Id:         t.PmaasEntityId,
-			EntityType: tracking.TrackableType,
+			EntityType: IThermostatType,
 			Name:       t.Name.Value,
 		},
 		NewState: t.GetThermostatData(),

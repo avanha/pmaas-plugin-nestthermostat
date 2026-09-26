@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/avanha/pmaas-common/lww"
@@ -39,6 +40,13 @@ type Traits struct {
 	ThermostatHvac                *ThermostatHvacTrait                `json:"sdm.devices.traits.ThermostatHvac,omitempty"`
 	ThermostatEco                 *ThermostatEcoTrait                 `json:"sdm.devices.traits.ThermostatEco,omitempty"`
 	ThermostatTemperatureSetpoint *ThermostatTemperatureSetpointTrait `json:"sdm.devices.traits.ThermostatTemperatureSetpoint,omitempty"`
+
+	// RoomName isn't an SDM trait at all — it's derived by FetchDevices from the device's
+	// ParentRelations (its room/structure assignment), and used as a fallback display name for when
+	// Info.CustomName isn't set (SDM's customName only reflects an explicit "Label" set in the Nest
+	// app, not the "Where"/room assignment most devices actually have). Always nil for Traits parsed
+	// from a pubsub message, since that payload doesn't carry room assignment at all.
+	RoomName *string `json:"-"`
 }
 
 type InfoTrait struct {
@@ -117,14 +125,25 @@ type applier interface {
 // polling nor pubsub delivery guarantees messages arrive in the order the underlying changes actually
 // happened: an update carrying only a Temperature change can legitimately have an earlier timestamp
 // than the last Humidity update this thermostat received, without being stale itself. A trait absent
-// from traits (nil) is always left untouched. Returns true if anything was actually applied.
+// from traits (nil) is always left untouched. Name is additionally never applied while t.NameLocked is
+// set — a locally-configured name always wins over whatever the device itself reports, regardless of
+// timestamp. Returns true if anything was actually applied.
 func ApplyTraits(t *entities.NestThermostat, timestamp time.Time, traits *Traits) bool {
 	fields := []applier{
 		traitField[string]{&t.Name, func(traits *Traits) (string, bool) {
-			if traits.Info == nil || traits.Info.CustomName == "" {
+			if t.NameLocked {
 				return "", false
 			}
-			return traits.Info.CustomName, true
+
+			if traits.Info != nil && traits.Info.CustomName != "" {
+				return traits.Info.CustomName, true
+			}
+
+			if traits.RoomName != nil && *traits.RoomName != "" {
+				return *traits.RoomName, true
+			}
+
+			return "", false
 		}},
 		traitField[float32]{&t.Temperature, func(traits *Traits) (float32, bool) {
 			if traits.Temperature == nil {
@@ -261,8 +280,34 @@ func (c *Client) FetchDevices(ctx context.Context) ([]DeviceTraits, error) {
 			traits = &Traits{}
 		}
 
+		if roomName := roomDisplayName(dev.ParentRelations); roomName != "" {
+			traits.RoomName = &roomName
+		}
+
 		result = append(result, DeviceTraits{Id: dev.Name, Traits: traits})
 	}
 
 	return result, nil
+}
+
+// roomDisplayName derives a fallback display name for a device from its parent relations (its
+// room/structure assignment) — this is what the "Where" setting in the Nest app actually reflects. It
+// prefers a room-level relation (Parent containing "/rooms/") over a bare structure-level one, since a
+// room is the more specific placement when both are present.
+func roomDisplayName(parentRelations []*smartdevicemanagement.GoogleHomeEnterpriseSdmV1ParentRelation) string {
+	var structureName string
+
+	for _, relation := range parentRelations {
+		if relation == nil || relation.DisplayName == "" {
+			continue
+		}
+
+		if strings.Contains(relation.Parent, "/rooms/") {
+			return relation.DisplayName
+		}
+
+		structureName = relation.DisplayName
+	}
+
+	return structureName
 }
