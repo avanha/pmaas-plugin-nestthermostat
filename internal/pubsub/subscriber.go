@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"iter"
 	"log"
 	"sync/atomic"
 	"time"
@@ -32,31 +31,22 @@ type MessagePayload struct {
 
 type Callback func(deviceId string, timestamp time.Time, traits googleapi.RawMessage)
 
+// Subscriber forwards every device-update message it receives to deviceUpdateHandler. There's no
+// device allowlist here: which devices this subscription can even receive messages for is already
+// decided by the user during the SDM/PCM consent flow, and the plugin itself discards updates for any
+// device it doesn't otherwise know about (see plugin.handleDeviceUpdate).
 type Subscriber struct {
 	options             SubscriberOptions
 	subscriptionID      string
-	registeredDevices   map[string]bool
 	deviceUpdateHandler Callback
 	lastError           atomic.Value
 }
 
-func NewSubscriber(
-	options SubscriberOptions,
-	registeredIds iter.Seq[string],
-	deviceUpdateHandler Callback) *Subscriber {
-	deviceIds := make(map[string]bool)
-
-	for id := range registeredIds {
-		deviceIds[id] = true
-	}
-
-	subscriber := Subscriber{
+func NewSubscriber(options SubscriberOptions, deviceUpdateHandler Callback) *Subscriber {
+	return &Subscriber{
 		options:             options,
-		registeredDevices:   deviceIds,
 		deviceUpdateHandler: deviceUpdateHandler,
 	}
-
-	return &subscriber
 }
 
 func (s *Subscriber) Run(ctx context.Context) {
@@ -103,13 +93,6 @@ func (s *Subscriber) onMessageReceived(ctx context.Context, msg *pubsub.Message)
 	}
 
 	if payload.ResourceUpdate.Name == "" || payload.ResourceUpdate.Traits == nil {
-		return
-	}
-
-	_, ok := s.registeredDevices[payload.ResourceUpdate.Name]
-
-	if !ok {
-		log.Printf("Discarding message for unknown device %s", payload.ResourceUpdate.Name)
 		return
 	}
 

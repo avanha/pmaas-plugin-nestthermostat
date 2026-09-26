@@ -5,7 +5,6 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
-	"maps"
 	"net/url"
 	"reflect"
 	"strings"
@@ -24,6 +23,8 @@ import (
 	"github.com/avanha/pmaas-plugin-nestthermostat/internal/pubsub"
 	"github.com/avanha/pmaas-plugin-nestthermostat/internal/sdm"
 	spi "github.com/avanha/pmaas-spi"
+	"github.com/avanha/pmaas-spi/events"
+	"github.com/avanha/pmaas-spi/tracking"
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/google"
 	"google.golang.org/api/googleapi"
@@ -124,17 +125,27 @@ func (p *plugin) Init(container spi.IPMAASContainer) {
 }
 
 func (p *plugin) Start() {
+	p.registerPreconfiguredThermostats()
+
 	ctx, cancelFn := context.WithCancel(context.Background())
 	p.cancelWorkers = cancelFn
-	deviceIds := maps.Keys(p.thermostats)
+
 	poller := poller2.NewPoller(
 		sdm.ClientOptions{
-			ClientId:     p.config.ClientId,
-			ClientSecret: p.config.ClientSecret,
-			RefreshToken: p.config.RefreshToken,
+			// Reuse the ClientID/ClientSecret already parsed from OAuthClientConfig in Init, rather
+			// than a separate config field, so there's only one place these credentials can come from.
+			ClientId:     p.oauthClientConfig.ClientID,
+			ClientSecret: p.oauthClientConfig.ClientSecret,
+			SdmProjectID: p.config.SdmProjectId,
 		},
-		deviceIds,
-		p.handleDeviceList)
+		p.currentRefreshToken,
+		func(fetchTime time.Time, devices []sdm.DeviceTraits) {
+			err := p.container.EnqueueOnPluginGoRoutine(func() { p.handleDeviceList(fetchTime, devices) })
+
+			if err != nil {
+				fmt.Printf("%T Failed to enqueue device list update: %v\n", p, err)
+			}
+		})
 	p.workersWg.Go(func() { poller.Run(ctx) })
 
 	subscriber := pubsub.NewSubscriber(
@@ -143,37 +154,130 @@ func (p *plugin) Start() {
 			SubscriptionId:      p.config.PubSubSubscriptionId,
 			ServiceAccountCreds: p.config.ServiceAccountCreds,
 		},
-		deviceIds,
-		p.handleDeviceUpdate)
+		func(deviceId string, timestamp time.Time, traits googleapi.RawMessage) {
+			err := p.container.EnqueueOnPluginGoRoutine(func() { p.handleDeviceUpdate(deviceId, timestamp, traits) })
+
+			if err != nil {
+				fmt.Printf("%T Failed to enqueue device update: %v\n", p, err)
+			}
+		})
 	p.workersWg.Go(func() { subscriber.Run(ctx) })
 }
 
-func (p *plugin) handleDeviceList(devices []entities.NestThermostat) {
+// registerPreconfiguredThermostats registers an entity for each device id in p.config.ThermostatIds
+// that isn't already known, so the UI has something to show for "well known" devices before the first
+// successful poll ever completes. Its data is empty until handleDeviceList or handleDeviceUpdate first
+// fills it in — a future history-tracking lookup could instead seed it from the last known sample.
+func (p *plugin) registerPreconfiguredThermostats() {
+	for _, thermostat := range p.config.Thermostats {
+		if _, known := p.thermostats[thermostat.ID]; known {
+			continue
+		}
 
+		p.registerNewThermostat(entities.NewNestThermostat(thermostat.ID, thermostat.Name))
+	}
 }
 
+// currentRefreshToken returns the plugin's current OAuth refresh token. It's safe to call from any
+// goroutine (the poller calls it from its own background goroutine): the read happens on the plugin's
+// own mailbox goroutine, same as every other access to plugin state.
+func (p *plugin) currentRefreshToken() string {
+	token, err := spi.ExecValueFunctionOnPluginGoRoutine(
+		p.container,
+		func() string { return p.oauthRefreshToken },
+		func() string { return "" },
+		"unable to read current refresh token")
+
+	if err != nil {
+		fmt.Printf("%T Failed to read current refresh token: %v\n", p, err)
+	}
+
+	return token
+}
+
+// handleDeviceList processes the poller's periodic full snapshot of every device the SDM API returns
+// (there's no local allowlist — which devices that is was already decided by the user during the
+// SDM/PCM consent flow). A device seen here for the first time is registered as a new entity; one
+// already known (including one only pre-registered via registerPreconfiguredThermostats, with no real
+// data yet) is updated in place, gated per-trait by sdm.ApplyTraits — see its doc for why a single
+// whole-record staleness check isn't enough. Runs on the plugin's own mailbox goroutine (see Start).
+func (p *plugin) handleDeviceList(fetchTime time.Time, devices []sdm.DeviceTraits) {
+	for _, device := range devices {
+		existing, known := p.thermostats[device.Id]
+
+		if !known {
+			t := entities.NewNestThermostat(device.Id, "Nest Thermostat")
+			sdm.ApplyTraits(t, fetchTime, device.Traits)
+			p.registerNewThermostat(t)
+			continue
+		}
+
+		if sdm.ApplyTraits(existing, fetchTime, device.Traits) {
+			p.broadcastThermostatStateChanged(existing)
+		}
+	}
+}
+
+// registerNewThermostat registers t as a new entity and, once that succeeds, starts tracking it in
+// p.thermostats. t is stored by pointer and mutated in place by later updates, since the entity's stub
+// (and anything that captured a reference to it via the stub) keeps pointing at this exact instance.
+func (p *plugin) registerNewThermostat(t *entities.NestThermostat) {
+	stub := entities.NewStub(p.container, t)
+
+	pmaasEntityId, err := p.container.RegisterEntity(
+		t.Id,
+		tracking.TrackableType,
+		t.Name.Value,
+		func() (any, error) { return stub, nil })
+
+	if err != nil {
+		fmt.Printf("%T Failed to register entity for thermostat %s: %v\n", p, t.Id, err)
+		return
+	}
+
+	t.PmaasEntityId = pmaasEntityId
+	p.thermostats[t.Id] = t
+
+	fmt.Printf("%T Registered thermostat %s (%s) as entity %s\n", p, t.Id, t.Name.Value, pmaasEntityId)
+}
+
+func (p *plugin) broadcastThermostatStateChanged(t *entities.NestThermostat) {
+	event := events.EntityStateChangedEvent{
+		EntityEvent: events.EntityEvent{
+			Id:         t.PmaasEntityId,
+			EntityType: tracking.TrackableType,
+			Name:       t.Name.Value,
+		},
+		NewState: t.GetThermostatData(),
+	}
+
+	if err := p.container.BroadcastEvent(t.PmaasEntityId, event); err != nil {
+		fmt.Printf("%T Failed to broadcast state change for %s: %v\n", p, t.Id, err)
+	}
+}
+
+// handleDeviceUpdate processes a single pubsub trait-change notification. Unlike handleDeviceList, it
+// never registers a new device: a bare partial trait update doesn't carry enough information (e.g. no
+// Info.customName) to stand in for a full device record, so an update for a device not already known
+// (from a prior handleDeviceList) is simply discarded. Runs on the plugin's own mailbox goroutine.
 func (p *plugin) handleDeviceUpdate(deviceId string, timestamp time.Time, traits googleapi.RawMessage) {
-	//t, ok := p.thermostats[deviceId]
-	//if !ok {
-	//	return
-	//}
-	//
-	//p.sdmClient.UpdateTraits(t, traits)
-	//t.LastUpdateTime = time.Now()
-	//
-	//event := events.EntityStateChangedEvent{
-	//	EntityEvent: events.EntityEvent{
-	//		Id:         t.Id,
-	//		EntityType: reflect.TypeOf(t),
-	//		Name:       t.Name,
-	//	},
-	//	NewState: t,
-	//}
-	//
-	//err := p.container.BroadcastEvent(t.Id, event)
-	//if err != nil {
-	//	log.Printf("NestThermostat: Failed to broadcast state change for %s: %v", t.Id, err)
-	//}
+	existing, known := p.thermostats[deviceId]
+
+	if !known {
+		fmt.Printf("%T Discarding update for unknown thermostat %s\n", p, deviceId)
+		return
+	}
+
+	parsedTraits, err := sdm.ParseTraits(traits)
+
+	if err != nil {
+		fmt.Printf("%T Failed to parse traits for thermostat %s: %v\n", p, deviceId, err)
+		return
+	}
+
+	if sdm.ApplyTraits(existing, timestamp, parsedTraits) {
+		p.broadcastThermostatStateChanged(existing)
+	}
 }
 
 func (p *plugin) Stop() chan func() {
@@ -206,9 +310,23 @@ func (p *plugin) Stop() chan func() {
 
 func (p *plugin) onWorkersStopped(callbackCh chan func()) {
 	fmt.Printf("%T Workers stopped, deregistering entities...\n", p)
-	//p.deregisterEntities()
+	p.deregisterEntities()
 	close(callbackCh)
+}
 
+func (p *plugin) deregisterEntities() {
+	for id, t := range p.thermostats {
+		if t.PmaasEntityId == "" {
+			continue
+		}
+
+		if err := p.container.DeregisterEntity(t.PmaasEntityId); err != nil {
+			fmt.Printf("%T Failed to deregister thermostat %s: %v\n", p, id, err)
+			continue
+		}
+
+		t.PmaasEntityId = ""
+	}
 }
 
 func (p *plugin) getStatusAndEntities() common.StatusAndEntities {
