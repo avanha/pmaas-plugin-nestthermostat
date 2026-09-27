@@ -52,6 +52,10 @@
     color: #5cb85c;
 }
 
+.entity-nestthermostat-thermostat .title-row .mode-icons .offline-icon {
+    color: #d9534f;
+}
+
 .entity-nestthermostat-thermostat .sensor-data {
     display: flex;
     flex-flow: row nowrap;

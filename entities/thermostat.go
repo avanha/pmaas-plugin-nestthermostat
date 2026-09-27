@@ -20,6 +20,7 @@ type NestThermostatData struct {
 	EcoMode        string
 	HeatSetpoint   float32
 	CoolSetpoint   float32
+	Connectivity   string
 	LastUpdateTime time.Time
 }
 
@@ -46,6 +47,18 @@ type NestThermostat struct {
 	EcoMode      lww.Register[string]
 	HeatSetpoint lww.Register[float32]
 	CoolSetpoint lww.Register[float32]
+	// Connectivity is "ONLINE" or "OFFLINE" (sdm.devices.traits.Connectivity).
+	Connectivity lww.Register[string]
+
+	// OfflineSince is when Connectivity last transitioned to "OFFLINE" — not a last-write-wins
+	// register like the fields above, since it's a derived transition marker rather than a directly
+	// received value: a poll reports the full trait set every time, so if this were tracked the same
+	// way as Connectivity itself, "still offline" would keep re-stamping it with the current poll time
+	// instead of preserving the actual moment it went offline. See sdm.ApplyTraits. Zero value means
+	// it's never been observed offline. Deliberately excluded from GetUpdateTimeTrackedFields: it's not
+	// a data-freshness signal, and including it would make a stale, disconnected device's LastUpdateTime
+	// look artificially recent just because we noticed it went offline recently.
+	OfflineSince time.Time
 
 	// PmaasEntityId is the id returned by IPMAASContainer.RegisterEntity once this thermostat has been
 	// registered. Empty until then.
@@ -78,6 +91,7 @@ func (t *NestThermostat) GetUpdateTimeTrackedFields() []lww.Timestamped {
 		&t.EcoMode,
 		&t.HeatSetpoint,
 		&t.CoolSetpoint,
+		&t.Connectivity,
 	}
 }
 
@@ -119,6 +133,7 @@ func (t *NestThermostat) Data() tracking.DataSample {
 			EcoMode:        t.EcoMode.Value,
 			HeatSetpoint:   t.HeatSetpoint.Value,
 			CoolSetpoint:   t.CoolSetpoint.Value,
+			Connectivity:   t.Connectivity.Value,
 			LastUpdateTime: lastUpdateTime,
 		},
 	}
@@ -142,6 +157,8 @@ func (t *NestThermostat) GetThermostatData() environment.Thermostat {
 		EcoMode:        t.EcoMode.Value,
 		HeatSetpoint:   t.HeatSetpoint.Value,
 		CoolSetpoint:   t.CoolSetpoint.Value,
+		Connectivity:   t.Connectivity.Value,
+		OfflineSince:   t.OfflineSince,
 		LastUpdateTime: t.LastUpdateTime(),
 	}
 }
@@ -162,11 +179,16 @@ func (t *NestThermostat) GetDisplayData() data.ThermostatData {
 		EcoMode:        t.EcoMode.Value,
 		HeatSetpoint:   t.HeatSetpoint.Value,
 		CoolSetpoint:   t.CoolSetpoint.Value,
+		Connectivity:   t.Connectivity.Value,
+		OfflineSince:   t.OfflineSince,
 		LastUpdateTime: t.LastUpdateTime(),
 	}
 }
 
 func NestThermostatDataToInsertArgs(anyData *any) ([]any, error) {
 	d := (*anyData).(NestThermostatData)
-	return []any{d.Temperature, d.Humidity, d.HvacStatus, d.Mode, d.EcoMode, d.HeatSetpoint, d.CoolSetpoint, d.LastUpdateTime}, nil
+	return []any{
+		d.Temperature, d.Humidity, d.HvacStatus, d.Mode, d.EcoMode, d.HeatSetpoint, d.CoolSetpoint,
+		d.Connectivity, d.LastUpdateTime,
+	}, nil
 }

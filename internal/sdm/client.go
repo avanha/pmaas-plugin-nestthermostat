@@ -41,6 +41,7 @@ type Traits struct {
 	ThermostatMode                *ThermostatModeTrait                `json:"sdm.devices.traits.ThermostatMode,omitempty"`
 	ThermostatEco                 *ThermostatEcoTrait                 `json:"sdm.devices.traits.ThermostatEco,omitempty"`
 	ThermostatTemperatureSetpoint *ThermostatTemperatureSetpointTrait `json:"sdm.devices.traits.ThermostatTemperatureSetpoint,omitempty"`
+	Connectivity                  *ConnectivityTrait                  `json:"sdm.devices.traits.Connectivity,omitempty"`
 
 	// FallbackName isn't an SDM trait at all — it's composed by FetchDevices from the device's
 	// ParentRelations (structure/room assignment) and Info.CustomName (as a parenthetical label), for
@@ -86,6 +87,11 @@ type ThermostatEcoTrait struct {
 type ThermostatTemperatureSetpointTrait struct {
 	HeatCelsius *float32 `json:"heatCelsius,omitempty"`
 	CoolCelsius *float32 `json:"coolCelsius,omitempty"`
+}
+
+// ConnectivityTrait's Status is one of "ONLINE", "OFFLINE".
+type ConnectivityTrait struct {
+	Status string `json:"status"`
 }
 
 // ParseTraits decodes a device's raw SDM traits payload. It's shared by both the poller (fetching a
@@ -136,6 +142,10 @@ type applier interface {
 // (which never carries room/structure assignment) still falls back to the bare label alone — a
 // temporary simplification that self-corrects on the next poll.
 func ApplyTraits(t *entities.NestThermostat, timestamp time.Time, traits *Traits) bool {
+	// Captured before the loop below runs, so the offline-transition check after it can tell "just went
+	// offline" apart from "still offline as of every poll since" — see the comment on OfflineSince.
+	previousConnectivity := t.Connectivity.Value
+
 	fields := []applier{
 		traitField[string]{&t.Name, func(traits *Traits) (string, bool) {
 			if t.NameLocked {
@@ -194,6 +204,12 @@ func ApplyTraits(t *entities.NestThermostat, timestamp time.Time, traits *Traits
 			}
 			return *traits.ThermostatTemperatureSetpoint.CoolCelsius, true
 		}},
+		traitField[string]{&t.Connectivity, func(traits *Traits) (string, bool) {
+			if traits.Connectivity == nil {
+				return "", false
+			}
+			return traits.Connectivity.Status, true
+		}},
 	}
 
 	applied := false
@@ -202,6 +218,14 @@ func ApplyTraits(t *entities.NestThermostat, timestamp time.Time, traits *Traits
 		if field.apply(timestamp, traits) {
 			applied = true
 		}
+	}
+
+	// A poll reports the full trait set every time, so "Connectivity is OFFLINE" would otherwise be
+	// re-applied (and its lww.Register's UpdateTime pushed forward) on every single poll the device
+	// remains offline for — that would make OfflineSince track "the last time we happened to check",
+	// not the actual moment it went offline. Only record a fresh OfflineSince on the actual transition.
+	if previousConnectivity != "OFFLINE" && t.Connectivity.Value == "OFFLINE" {
+		t.OfflineSince = timestamp
 	}
 
 	return applied

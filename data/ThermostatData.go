@@ -14,9 +14,13 @@ type ThermostatData struct {
 	// HvacStatus is what the system is actually doing right now: "OFF", "HEATING", "COOLING".
 	HvacStatus string
 	// Mode is the configured mode, independent of HvacStatus: "HEAT", "COOL", "HEATCOOL", "OFF".
-	Mode           string
-	EcoMode        string
-	HeatSetpoint   float32
-	CoolSetpoint   float32
+	Mode         string
+	EcoMode      string
+	HeatSetpoint float32
+	CoolSetpoint float32
+	// Connectivity is "ONLINE" or "OFFLINE". OfflineSince is when it last transitioned to "OFFLINE";
+	// zero if it's never been observed offline (meaningless while Connectivity == "ONLINE").
+	Connectivity   string
+	OfflineSince   time.Time
 	LastUpdateTime time.Time
 }
