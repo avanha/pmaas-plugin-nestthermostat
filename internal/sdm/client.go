@@ -42,9 +42,10 @@ type Traits struct {
 	ThermostatEco                 *ThermostatEcoTrait                 `json:"sdm.devices.traits.ThermostatEco,omitempty"`
 	ThermostatTemperatureSetpoint *ThermostatTemperatureSetpointTrait `json:"sdm.devices.traits.ThermostatTemperatureSetpoint,omitempty"`
 
-	// RoomName isn't actually an SDM trait. — it's derived by FetchDevices from the device's
-	// ParentRelations (its room/structure assignment). Always nil for Traits parsed
-	// from a pubsub message.
+	// FallbackName isn't an SDM trait at all — it's composed by FetchDevices from the device's
+	// ParentRelations (structure/room assignment) and Info.CustomName (as a parenthetical label), for
+	// when CustomName alone isn't the full picture the Nest/Home app shows. Always nil for Traits
+	// parsed from a pubsub message, since that payload doesn't carry room/structure assignment at all.
 	FallbackName *string `json:"-"`
 }
 
@@ -129,7 +130,11 @@ type applier interface {
 // ApplyTraits copies whatever trait fields are present in traits onto a NestThermostat.
 // Thermostat attributes maintain a last update timestamp and only accept values when the timestamp is newer than the
 // last update time. Absent traits (nil) are ignored.  In addition, Name is skipped if t.NameLocked is set.
-// When unlocked, the Name itself is sourced from the Info.CustomName with extra fallback logic if CustomNmae is blank.
+// When unlocked, Name prefers the composed FallbackName (structure + room + CustomName label — see
+// fallbackName) over the bare CustomName, since FallbackName already incorporates CustomName when one's
+// set. FallbackName is only ever present on poll-sourced Traits, though, so a pubsub-only Info update
+// (which never carries room/structure assignment) still falls back to the bare label alone — a
+// temporary simplification that self-corrects on the next poll.
 func ApplyTraits(t *entities.NestThermostat, timestamp time.Time, traits *Traits) bool {
 	fields := []applier{
 		traitField[string]{&t.Name, func(traits *Traits) (string, bool) {
@@ -137,12 +142,12 @@ func ApplyTraits(t *entities.NestThermostat, timestamp time.Time, traits *Traits
 				return "", false
 			}
 
-			if traits.Info != nil && traits.Info.CustomName != "" {
-				return traits.Info.CustomName, true
-			}
-
 			if traits.FallbackName != nil && *traits.FallbackName != "" {
 				return *traits.FallbackName, true
+			}
+
+			if traits.Info != nil && traits.Info.CustomName != "" {
+				return traits.Info.CustomName, true
 			}
 
 			return "", false
@@ -288,7 +293,13 @@ func (c *Client) FetchDevices(ctx context.Context) ([]DeviceTraits, error) {
 			traits = &Traits{}
 		}
 
-		if fallbackName := fallbackName(dev.ParentRelations); fallbackName != "" {
+		var label string
+
+		if traits.Info != nil {
+			label = traits.Info.CustomName
+		}
+
+		if fallbackName := fallbackName(dev.ParentRelations, label); fallbackName != "" {
 			traits.FallbackName = &fallbackName
 		}
 
@@ -298,12 +309,18 @@ func (c *Client) FetchDevices(ctx context.Context) ([]DeviceTraits, error) {
 	return result, nil
 }
 
-// fallbackName derives a fallback display name for a device from its parent relations (its
-// room/structure assignment) — this is what the "Where" setting in the Nest app actually reflects. It
-// prefers a room-level relation (Parent containing "/rooms/") over a  structure-level one, since a
-// room is the more specific.
-func fallbackName(parentRelations []*smartdevicemanagement.GoogleHomeEnterpriseSdmV1ParentRelation) string {
-	var structureName string
+// fallbackName composes a display name for a device from its structure/room assignment (its
+// ParentRelations — this is what the "Where" setting in the Nest app actually reflects) and label (its
+// Info.CustomName). The structure and room names, if present, form the base name; label, if present, is
+// appended in parentheses as a disambiguator — mirroring the Nest app's own documented convention that
+// Label "appear[s] next to the location name in parentheses", used to tell apart multiple devices
+// assigned to the same room, rather than replacing the location name outright. Including the structure
+// name (not just the room) matters here specifically because, unlike the Nest app — where you're always
+// looking at one structure at a time — this plugin may show devices from multiple structures side by
+// side with nothing else to disambiguate them.
+func fallbackName(
+	parentRelations []*smartdevicemanagement.GoogleHomeEnterpriseSdmV1ParentRelation, label string) string {
+	var structureName, roomName string
 
 	for _, relation := range parentRelations {
 		if relation == nil || relation.DisplayName == "" {
@@ -311,11 +328,21 @@ func fallbackName(parentRelations []*smartdevicemanagement.GoogleHomeEnterpriseS
 		}
 
 		if strings.Contains(relation.Parent, "/rooms/") {
-			return relation.DisplayName
+			roomName = relation.DisplayName
+		} else if strings.Contains(relation.Parent, "/structures/") {
+			structureName = relation.DisplayName
 		}
-
-		structureName = relation.DisplayName
 	}
 
-	return structureName
+	name := strings.TrimSpace(structureName + " " + roomName)
+
+	if label == "" {
+		return name
+	}
+
+	if name == "" {
+		return label
+	}
+
+	return fmt.Sprintf("%s (%s)", name, label)
 }
