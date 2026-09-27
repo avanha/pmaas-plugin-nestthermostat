@@ -115,6 +115,10 @@ func NewPlugin(cfg config.PluginConfig) spi.IPMAASPlugin {
 	}
 }
 
+func (p *plugin) ShortName() string {
+	return "nestthermostat"
+}
+
 func (p *plugin) Init(container spi.IPMAASContainer) {
 	p.container = container
 	p.saveQueue = mailbox.NewConflatingMailbox()
@@ -471,7 +475,7 @@ func (p *plugin) prepareOAuthAttempt(baseUrl string) common.OAuthAttemptOrError 
 	// Copy the template config so this attempt's RedirectURL doesn't leak into other attempts or
 	// concurrent access to p.oauthClientConfig.
 	oauthConfig := *p.oauthClientConfig
-	oauthConfig.RedirectURL = strings.TrimSuffix(baseUrl, "/") + common.OAuthCallbackPath
+	oauthConfig.RedirectURL = strings.TrimSuffix(baseUrl, "/") + p.container.RouteFullPath(common.OAuthCallbackPath)
 
 	state := generateRandomState()
 

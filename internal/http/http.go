@@ -54,10 +54,10 @@ func (h *Handler) Init(container spi.IPMAASContainer, entityStore common.EntityS
 	h.entityStore = entityStore
 	container.ProvideContentFS(&contentFS, "content")
 	container.EnableStaticContent("static")
-	container.AddRoute("/plugins/nestthermostat/", h.handleHttpListRequest)
+	container.AddRoute("", h.handleHttpListRequest)
 	container.AddRoute(common.OAuthCallbackPath, h.handleHttpOAuthCallbackRequest)
 	container.AddJsonRoute(
-		"/plugins/nestthermostat/oauthAttempt",
+		"oauthAttempt",
 		func() any { return nil },
 		h.handleHttpOAuthAttemptRequest)
 	container.RegisterEntityRenderer(

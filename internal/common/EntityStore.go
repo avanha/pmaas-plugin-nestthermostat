@@ -6,10 +6,11 @@ import (
 	"github.com/avanha/pmaas-plugin-nestthermostat/data"
 )
 
-// OAuthCallbackPath is the path Google redirects back to after the user completes consent. It's
-// shared between the route registration (internal/http.Handler.Init) and the redirect_uri built in
-// plugin.prepareOAuthAttempt, which must match exactly.
-const OAuthCallbackPath = "/plugins/nestthermostat/oauthCallback"
+// OAuthCallbackPath is the path, relative to this plugin's namespace, that Google redirects back to
+// after the user completes consent. It's shared between the route registration
+// (internal/http.Handler.Init, via container.AddRoute) and the redirect_uri built in
+// plugin.prepareOAuthAttempt (via spi.PluginFullPath), which must match exactly.
+const OAuthCallbackPath = "oauthCallback"
 
 type StatusAndEntities struct {
 	Status      data.PluginStatus
