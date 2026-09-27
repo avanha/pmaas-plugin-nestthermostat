@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/avanha/pmaas-common/lww"
+	"github.com/avanha/pmaas-plugin-nestthermostat/data"
 	"github.com/avanha/pmaas-spi/environment"
 	"github.com/avanha/pmaas-spi/tracking"
 )
@@ -136,6 +137,26 @@ func (t *NestThermostat) GetThermostatData() environment.Thermostat {
 			Humidity:       t.Humidity.Value,
 			LastUpdateTime: t.LastUpdateTime(),
 		},
+		HvacStatus:     t.HvacStatus.Value,
+		Mode:           t.Mode.Value,
+		EcoMode:        t.EcoMode.Value,
+		HeatSetpoint:   t.HeatSetpoint.Value,
+		CoolSetpoint:   t.CoolSetpoint.Value,
+		LastUpdateTime: t.LastUpdateTime(),
+	}
+}
+
+// GetDisplayData returns this thermostat's own list-page display shape (see data.ThermostatData) —
+// distinct from GetThermostatData, which is the generic cross-plugin representation broadcast to other
+// plugins. This one includes Id, since the plugin's own status page is exactly where a user would want
+// to look up a device's id for their local config.
+func (t *NestThermostat) GetDisplayData() data.ThermostatData {
+	return data.ThermostatData{
+		Id:             t.Id,
+		Name:           t.Name.Value,
+		Temperature:    t.Temperature.Value,
+		HasHumidity:    true,
+		Humidity:       t.Humidity.Value,
 		HvacStatus:     t.HvacStatus.Value,
 		Mode:           t.Mode.Value,
 		EcoMode:        t.EcoMode.Value,

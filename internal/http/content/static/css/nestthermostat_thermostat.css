@@ -1,0 +1,125 @@
+.entity-nestthermostat-thermostat {
+    display: flex;
+    flex-flow: column;
+    border: 1px solid black;
+    padding: 5px;
+    min-width: 218px;
+}
+
+.entity-nestthermostat-thermostat .title-row {
+    display: flex;
+    flex-flow: row nowrap;
+}
+
+.entity-nestthermostat-thermostat .title-row .name {
+    flex: 1;
+    font-size: 15pt;
+}
+
+.entity-nestthermostat-thermostat .title-row .mode-icons {
+    display: flex;
+    flex-flow: row nowrap;
+    align-items: center;
+    font-size: 14pt;
+}
+
+.entity-nestthermostat-thermostat .title-row .mode-icons i:not(:first-child) {
+    margin-left: 8px;
+}
+
+.entity-nestthermostat-thermostat .title-row .mode-icons .heat-icon,
+.entity-nestthermostat-thermostat .title-row .mode-icons .cool-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 22px;
+    height: 22px;
+    border-radius: 4px;
+    color: grey;
+}
+
+.entity-nestthermostat-thermostat .title-row .mode-icons .heat-icon.active {
+    background-color: #e67e22;
+    color: white;
+}
+
+.entity-nestthermostat-thermostat .title-row .mode-icons .cool-icon.active {
+    background-color: #337ab7;
+    color: white;
+}
+
+.entity-nestthermostat-thermostat .title-row .mode-icons .eco {
+    color: #5cb85c;
+}
+
+.entity-nestthermostat-thermostat .sensor-data {
+    display: flex;
+    flex-flow: row nowrap;
+    color: #6fb5c7;
+    align-items: baseline;
+    font-size: 15pt;
+    margin-top: 5px;
+}
+
+.entity-nestthermostat-thermostat .sensor-data div:not(:first-child) {
+    margin-left: 20px;
+}
+
+.entity-nestthermostat-thermostat .sensor-data .temp-celsius {
+    font-size: 20pt;
+}
+
+.entity-nestthermostat-thermostat .sensor-data .temp-fahrenheit {
+    margin-left: 10px !important;
+}
+
+.entity-nestthermostat-thermostat .sensor-data .setpoint.heat {
+    color: #d9534f;
+}
+
+.entity-nestthermostat-thermostat .sensor-data .setpoint.cool {
+    color: #337ab7;
+}
+
+.entity-nestthermostat-thermostat .sensor-data .timestamp {
+    flex: 5 1 auto;
+    text-align: right;
+    font-size: 11pt;
+    color: grey;
+}
+
+.entity-nestthermostat-thermostat .id-row {
+    display: flex;
+    flex-flow: row nowrap;
+    align-items: center;
+    margin-top: 5px;
+    font-size: 9pt;
+    color: grey;
+}
+
+.entity-nestthermostat-thermostat .id-row .id-label {
+    margin-right: 5px;
+}
+
+.entity-nestthermostat-thermostat .id-row .id-value {
+    flex: 1;
+    min-width: 0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    font-family: monospace;
+}
+
+.entity-nestthermostat-thermostat .id-row .copy-id-button {
+    background: none;
+    border: none;
+    color: grey;
+    cursor: pointer;
+    padding: 0;
+    margin-left: 6px;
+    line-height: 1;
+}
+
+.entity-nestthermostat-thermostat .id-row .copy-id-button:hover {
+    color: #6fb5c7;
+}

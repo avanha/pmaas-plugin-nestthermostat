@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/url"
 	"reflect"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -367,10 +368,19 @@ func (p *plugin) deregisterEntities() {
 }
 
 func (p *plugin) getStatusAndEntities() common.StatusAndEntities {
+	thermostats := make([]data.ThermostatData, 0, len(p.thermostats))
+
+	for _, thermostat := range p.thermostats {
+		thermostats = append(thermostats, thermostat.GetDisplayData())
+	}
+
+	sort.Slice(thermostats, func(i, j int) bool { return thermostats[i].Name < thermostats[j].Name })
+
 	return common.StatusAndEntities{
 		Status: data.PluginStatus{
 			GoogleUser: p.googleUser,
 		},
+		Thermostats: thermostats,
 	}
 }
 

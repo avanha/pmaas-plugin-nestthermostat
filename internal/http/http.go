@@ -4,9 +4,11 @@ import (
 	"embed"
 	"errors"
 	"fmt"
+	"html/template"
 	"io"
 	"net/http"
 	"reflect"
+	"time"
 
 	"github.com/avanha/pmaas-plugin-nestthermostat/data"
 	"github.com/avanha/pmaas-plugin-nestthermostat/internal/common"
@@ -21,6 +23,17 @@ var statusTemplate = spi.TemplateInfo{
 	Paths:   []string{"templates/nestthermostat_status.htmlt"},
 	Styles:  []string{"css/nestthermostat_status.css"},
 	Scripts: []string{"js/nestthermostat_status.js"},
+}
+
+var thermostatTemplate = spi.TemplateInfo{
+	Name: "nestthermostat_thermostat",
+	FuncMap: template.FuncMap{
+		"CelsiusToFahrenheit": celsiusToFahrenheit,
+		"RelativeTime":        relativeTime,
+	},
+	Paths:   []string{"templates/nestthermostat_thermostat.htmlt"},
+	Styles:  []string{"css/nestthermostat_thermostat.css"},
+	Scripts: []string{"js/nestthermostat_thermostat.js"},
 }
 
 type Handler struct {
@@ -46,6 +59,9 @@ func (h *Handler) Init(container spi.IPMAASContainer, entityStore common.EntityS
 	container.RegisterEntityRenderer(
 		reflect.TypeOf((*data.PluginStatus)(nil)).Elem(),
 		h.statusDataRendererFactory)
+	container.RegisterEntityRenderer(
+		reflect.TypeOf((*data.ThermostatData)(nil)).Elem(),
+		h.thermostatDataRendererFactory)
 }
 
 func (h *Handler) handleHttpListRequest(writer http.ResponseWriter, request *http.Request) {
@@ -56,17 +72,13 @@ func (h *Handler) handleHttpListRequest(writer http.ResponseWriter, request *htt
 		result = common.StatusAndEntities{}
 	}
 
-	//sort.SliceStable(result.Tunnels, func(i, j int) bool {
-	//	return result.Tunnels[i].Name < result.Tunnels[j].Name
-	//})
+	// getStatusAndEntities already returns result.Thermostats sorted by name; just take a pointer to
+	// each so the render layer gets *data.ThermostatData, matching how the status header is passed.
+	entityPointers := make([]any, len(result.Thermostats))
 
-	// Convert the slice of structs to a slice of any
-	//entityListSize := len(result.Tunnels)
-	entityPointers := make([]any, 0)
-	//
-	//for i := 0; i < entityListSize; i++ {
-	//	entityPointers[i] = &result.Tunnels[i]
-	//}
+	for i := range result.Thermostats {
+		entityPointers[i] = &result.Thermostats[i]
+	}
 
 	h.container.RenderList(
 		writer,
@@ -150,4 +162,62 @@ func (h *Handler) statusDataRendererFactory() (spi.EntityRenderer, error) {
 		Styles:              template.Styles,
 		Scripts:             template.Scripts,
 	}, nil
+}
+
+func (h *Handler) thermostatDataRendererFactory() (spi.EntityRenderer, error) {
+	// Load the template
+	compiledTemplate, err := h.container.GetTemplate(&thermostatTemplate)
+
+	if err != nil {
+		return spi.EntityRenderer{}, fmt.Errorf("unable to load nestthermostat_thermostat template: %v", err)
+	}
+
+	// Declare a function that casts the entity to the expected type and evaluates it via the template loaded above
+	renderer := func(w io.Writer, entity any) error {
+		thermostat, ok := entity.(*data.ThermostatData)
+
+		if !ok {
+			return errors.New("item is not an instance of *ThermostatData")
+		}
+
+		err := compiledTemplate.Instance.Execute(w, thermostat)
+
+		if err != nil {
+			return fmt.Errorf("unable to execute nestthermostat_thermostat template: %w", err)
+		}
+
+		return nil
+	}
+
+	return spi.EntityRenderer{
+		StreamingRenderFunc: renderer,
+		Styles:              compiledTemplate.Styles,
+		Scripts:             compiledTemplate.Scripts,
+	}, nil
+}
+
+func celsiusToFahrenheit(celsiusValue float32) float32 {
+	return celsiusValue*float32(9)/float32(5) + float32(32)
+}
+
+func relativeTime(timeValue time.Time) string {
+	elapsed := time.Now().Sub(timeValue).Truncate(time.Second)
+
+	if elapsed.Seconds() < 30 {
+		return "< 30s"
+	}
+
+	if elapsed.Seconds() < 60 {
+		return "< 1m"
+	}
+
+	elapsed = elapsed.Truncate(time.Minute)
+
+	if elapsed.Minutes() < 60 {
+		return fmt.Sprintf("%vm", elapsed.Minutes())
+	}
+
+	elapsed = elapsed.Truncate(time.Hour)
+
+	return fmt.Sprintf("%vh", elapsed.Hours())
 }

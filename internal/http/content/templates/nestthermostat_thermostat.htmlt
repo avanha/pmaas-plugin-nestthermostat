@@ -1,0 +1,50 @@
+<div class="entity-nestthermostat-thermostat">
+    <div class="title-row">
+        <div class="name">{{.Name}}</div>
+        <div class="mode-icons">
+            {{if or (eq .Mode "HEAT") (eq .Mode "HEATCOOL")}}
+                <i class="bi bi-fire heat-icon{{if eq .HvacStatus "HEATING"}} active{{end}}" title="Heat"></i>
+            {{end}}
+            {{if or (eq .Mode "COOL") (eq .Mode "HEATCOOL")}}
+                <i class="bi bi-snow cool-icon{{if eq .HvacStatus "COOLING"}} active{{end}}" title="Cool"></i>
+            {{end}}
+            {{if eq .EcoMode "MANUAL_ECO"}}
+                <i class="bi bi-recycle eco" title="Eco mode"></i>
+            {{end}}
+        </div>
+    </div>
+    <div class="sensor-data">
+        <div class="temp-celsius">{{printf "%.1f" .Temperature}} C</div>
+        <div class="temp-fahrenheit">{{CelsiusToFahrenheit .Temperature | printf "%.1f"}} F</div>
+        {{if .HasHumidity}}
+            <div class="humidity">
+                <span class="label"><i class="bi bi-droplet-fill"></i></span>
+                <span class="value">{{.Humidity}}%</span>
+            </div>
+        {{end}}
+        {{if or (eq .Mode "HEAT") (eq .Mode "HEATCOOL")}}
+            <div class="setpoint heat">
+                <span class="label"><i class="bi bi-fire"></i></span>
+                <span class="value">{{printf "%.1f" .HeatSetpoint}} C</span>
+            </div>
+        {{end}}
+        {{if or (eq .Mode "COOL") (eq .Mode "HEATCOOL")}}
+            <div class="setpoint cool">
+                <span class="label"><i class="bi bi-snow"></i></span>
+                <span class="value">{{printf "%.1f" .CoolSetpoint}} C</span>
+            </div>
+        {{end}}
+        <div class="timestamp">
+            <span class="label"><i class="bi bi-stopwatch"></i></span>
+            <span class="value">{{RelativeTime .LastUpdateTime}}</span>
+        </div>
+    </div>
+    <div class="id-row">
+        <span class="id-label">ID</span>
+        <span class="id-value" title="{{.Id}}">{{.Id}}</span>
+        <button type="button" class="copy-id-button" data-id="{{.Id}}"
+                onclick="copyThermostatId(this)" title="Copy device ID to clipboard">
+            <i class="bi bi-clipboard"></i>
+        </button>
+    </div>
+</div>
