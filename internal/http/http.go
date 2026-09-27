@@ -13,6 +13,7 @@ import (
 	"github.com/avanha/pmaas-plugin-nestthermostat/data"
 	"github.com/avanha/pmaas-plugin-nestthermostat/internal/common"
 	"github.com/avanha/pmaas-spi"
+	"github.com/avanha/pmaas-spi/environment"
 )
 
 //go:embed content/static content/templates
@@ -30,6 +31,7 @@ var thermostatTemplate = spi.TemplateInfo{
 	FuncMap: template.FuncMap{
 		"CelsiusToFahrenheit": celsiusToFahrenheit,
 		"RelativeTime":        relativeTime,
+		"IsOffline":           isOffline,
 	},
 	Paths:   []string{"templates/nestthermostat_thermostat.htmlt"},
 	Styles:  []string{"css/nestthermostat_thermostat.css"},
@@ -220,4 +222,8 @@ func relativeTime(timeValue time.Time) string {
 	elapsed = elapsed.Truncate(time.Hour)
 
 	return fmt.Sprintf("%vh", elapsed.Hours())
+}
+
+func isOffline(connectivity environment.Connectivity) bool {
+	return connectivity == environment.ConnectivityOffline
 }

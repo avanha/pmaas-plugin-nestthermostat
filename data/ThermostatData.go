@@ -1,6 +1,10 @@
 package data
 
-import "time"
+import (
+	"time"
+
+	"github.com/avanha/pmaas-spi/environment"
+)
 
 // ThermostatData is the plugin's own list-page display shape for a thermostat — distinct from
 // entities.NestThermostatData (the tracking/history sample shape), since this one also carries static
@@ -18,9 +22,9 @@ type ThermostatData struct {
 	EcoMode      string
 	HeatSetpoint float32
 	CoolSetpoint float32
-	// Connectivity is "ONLINE" or "OFFLINE". OfflineSince is when it last transitioned to "OFFLINE";
-	// zero if it's never been observed offline (meaningless while Connectivity == "ONLINE").
-	Connectivity   string
+	// OfflineSince is when Connectivity last transitioned to environment.ConnectivityOffline; zero if
+	// it's never been observed offline (meaningless while Connectivity != ConnectivityOffline).
+	Connectivity   environment.Connectivity
 	OfflineSince   time.Time
 	LastUpdateTime time.Time
 }

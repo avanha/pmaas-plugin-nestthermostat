@@ -20,8 +20,23 @@ type NestThermostatData struct {
 	EcoMode        string
 	HeatSetpoint   float32
 	CoolSetpoint   float32
-	Connectivity   string
+	Connectivity   environment.Connectivity
 	LastUpdateTime time.Time
+}
+
+// connectivityFromStatus converts the raw sdm.devices.traits.Connectivity status string (which is all
+// NestThermostat itself ever stores — see the Connectivity field below) to the generic
+// environment.Connectivity constant used everywhere this thermostat's state is exposed externally. An
+// unrecognized or not-yet-observed status maps to environment.ConnectivityUnknown, never to a guess.
+func connectivityFromStatus(status string) environment.Connectivity {
+	switch status {
+	case "ONLINE":
+		return environment.ConnectivityOnline
+	case "OFFLINE":
+		return environment.ConnectivityOffline
+	default:
+		return environment.ConnectivityUnknown
+	}
 }
 
 type NestThermostat struct {
@@ -133,7 +148,7 @@ func (t *NestThermostat) Data() tracking.DataSample {
 			EcoMode:        t.EcoMode.Value,
 			HeatSetpoint:   t.HeatSetpoint.Value,
 			CoolSetpoint:   t.CoolSetpoint.Value,
-			Connectivity:   t.Connectivity.Value,
+			Connectivity:   connectivityFromStatus(t.Connectivity.Value),
 			LastUpdateTime: lastUpdateTime,
 		},
 	}
@@ -157,7 +172,7 @@ func (t *NestThermostat) GetThermostatData() environment.Thermostat {
 		EcoMode:        t.EcoMode.Value,
 		HeatSetpoint:   t.HeatSetpoint.Value,
 		CoolSetpoint:   t.CoolSetpoint.Value,
-		Connectivity:   t.Connectivity.Value,
+		Connectivity:   connectivityFromStatus(t.Connectivity.Value),
 		OfflineSince:   t.OfflineSince,
 		LastUpdateTime: t.LastUpdateTime(),
 	}
@@ -179,7 +194,7 @@ func (t *NestThermostat) GetDisplayData() data.ThermostatData {
 		EcoMode:        t.EcoMode.Value,
 		HeatSetpoint:   t.HeatSetpoint.Value,
 		CoolSetpoint:   t.CoolSetpoint.Value,
-		Connectivity:   t.Connectivity.Value,
+		Connectivity:   connectivityFromStatus(t.Connectivity.Value),
 		OfflineSince:   t.OfflineSince,
 		LastUpdateTime: t.LastUpdateTime(),
 	}
@@ -189,6 +204,6 @@ func NestThermostatDataToInsertArgs(anyData *any) ([]any, error) {
 	d := (*anyData).(NestThermostatData)
 	return []any{
 		d.Temperature, d.Humidity, d.HvacStatus, d.Mode, d.EcoMode, d.HeatSetpoint, d.CoolSetpoint,
-		d.Connectivity, d.LastUpdateTime,
+		d.Connectivity.String(), d.LastUpdateTime,
 	}, nil
 }
