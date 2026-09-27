@@ -2,7 +2,7 @@ class NestThermostatStatus {
     constructor(doc) {
         this.doc = doc;
         this.rootElement = null;
-        this.loginButton = null;
+        this.getTokenButton = null;
     }
 
     onReadyStateChange = () => {
@@ -22,16 +22,16 @@ class NestThermostatStatus {
             return false;
         }
         this.rootElement = this.doc.querySelector("div.entity-nestthermostat-status");
-        this.loginButton = this.rootElement.querySelector("button.login-button");
-        this.loginButton.addEventListener("click", this.onLoginButtonClick);
+        this.getTokenButton = this.rootElement.querySelector("button.get-token-button");
+        this.getTokenButton.addEventListener("click", this.onGetTokenButtonClick);
 
         console.log("NestThermostatStatus initialized");
 
         return true;
     }
 
-    onLoginButtonClick = async () => {
-        console.log("Login button clicked");
+    onGetTokenButtonClick = async () => {
+        console.log("Get Token button clicked");
         const attempt = await this.fetchOAuthUrl();
 
         if (attempt) {

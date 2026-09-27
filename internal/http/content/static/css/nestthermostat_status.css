@@ -2,3 +2,51 @@
     display: flex;
     flex-flow: column;
 }
+
+.entity-nestthermostat-status .monospace {
+    font-size: 10pt;
+    font-family: "Roboto", "Menlo", "Consolas", monospace;
+}
+
+.entity-nestthermostat-status .container {
+    display: flex;
+    flex-flow: row wrap;
+    align-items: center;
+    margin: 0 0 5px 0;
+}
+
+.entity-nestthermostat-status .container > :not(:last-child) {
+    margin-right: 10px;
+}
+
+.entity-nestthermostat-status .container > * {
+    white-space: nowrap;
+}
+
+.entity-nestthermostat-status .container .container {
+    margin-bottom: 0;
+}
+
+.entity-nestthermostat-status .label::after {
+    content: ":";
+}
+
+.entity-nestthermostat-status .group-label {
+    font-weight: bold;
+}
+
+.entity-nestthermostat-status .group-label::after {
+    content: " - ";
+}
+
+.entity-nestthermostat-status .token-ok {
+    color: #5cb85c;
+}
+
+.entity-nestthermostat-status .token-missing {
+    color: #d9534f;
+}
+
+.entity-nestthermostat-status .get-token-button {
+    cursor: pointer;
+}

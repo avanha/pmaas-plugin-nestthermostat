@@ -53,15 +53,26 @@ type plugin struct {
 	thermostats map[string]*entities.NestThermostat
 	// anonymousThermostatCounter generates unique suffixes for placeholder thermostat names (see
 	// nextPlaceholderThermostatName). Only ever touched on the plugin's own mailbox goroutine.
-	anonymousThermostatCounter int
-	cancelWorkers              context.CancelFunc
-	workersWg                  sync.WaitGroup
-	googleUser                 string
-	oauthClientConfig          *oauth2.Config
-	oauthAttempt               *oauthAttempt
-	oauthClientToken           *oauth2.Token
-	oauthClientScope           string
-	oauthRefreshToken          string
+	anonymousThermostatCounter    int
+	cancelWorkers                 context.CancelFunc
+	workersWg                     sync.WaitGroup
+	googleUser                    string
+	oauthClientConfig             *oauth2.Config
+	oauthAttempt                  *oauthAttempt
+	oauthClientToken              *oauth2.Token
+	oauthClientScope              string
+	oauthRefreshToken             string
+	oauthRefreshTokenObtainedTime time.Time
+
+	// lastPollTime and lastPubSubMessageTime are the last time each data-ingestion path actually
+	// delivered device data — see data.PluginStatus for the same distinction from "was attempted".
+	lastPollTime          time.Time
+	lastPubSubMessageTime time.Time
+
+	// lastErrorMessage/lastErrorTime record the plugin's most recent error, from any source (OAuth
+	// token exchange, polling, pubsub, or SDM trait processing) — see recordError.
+	lastErrorMessage string
+	lastErrorTime    time.Time
 
 	// saveQueue persists the latest persistent config off the plugin's own mailbox goroutine, so a
 	// slow disk write never blocks it. Only the most recent save matters, so a queued-but-not-yet-
@@ -131,6 +142,7 @@ func (p *plugin) Init(container spi.IPMAASContainer) {
 	if persistentConfig != nil {
 		persistentConfigV1 := persistentConfig.(*config.PersistentConfigV1)
 		p.oauthRefreshToken = persistentConfigV1.RefreshToken
+		p.oauthRefreshTokenObtainedTime = persistentConfigV1.RefreshTokenObtainedTime
 	}
 }
 
@@ -155,6 +167,13 @@ func (p *plugin) Start() {
 			if err != nil {
 				fmt.Printf("%T Failed to enqueue device list update: %v\n", p, err)
 			}
+		},
+		func(pollErr error) {
+			err := p.container.EnqueueOnPluginGoRoutine(func() { p.recordError(pollErr) })
+
+			if err != nil {
+				fmt.Printf("%T Failed to enqueue poll error (%v): %v\n", p, pollErr, err)
+			}
 		})
 	p.workersWg.Go(func() { poller.Run(ctx) })
 
@@ -169,6 +188,13 @@ func (p *plugin) Start() {
 
 			if err != nil {
 				fmt.Printf("%T Failed to enqueue device update: %v\n", p, err)
+			}
+		},
+		func(pubsubErr error) {
+			err := p.container.EnqueueOnPluginGoRoutine(func() { p.recordError(pubsubErr) })
+
+			if err != nil {
+				fmt.Printf("%T Failed to enqueue pubsub error (%v): %v\n", p, pubsubErr, err)
 			}
 		})
 	p.workersWg.Go(func() { subscriber.Run(ctx) })
@@ -227,6 +253,8 @@ func (p *plugin) currentRefreshToken() string {
 // data yet) is updated in place, gated per-trait by sdm.ApplyTraits — see its doc for why a single
 // whole-record staleness check isn't enough. Runs on the plugin's own mailbox goroutine (see Start).
 func (p *plugin) handleDeviceList(fetchTime time.Time, devices []sdm.DeviceTraits) {
+	p.lastPollTime = fetchTime
+
 	for _, device := range devices {
 		existing, known := p.thermostats[device.Id]
 
@@ -299,6 +327,8 @@ func (p *plugin) broadcastThermostatStateChanged(t *entities.NestThermostat) {
 // Info.customName) to stand in for a full device record, so an update for a device not already known
 // (from a prior handleDeviceList) is simply discarded. Runs on the plugin's own mailbox goroutine.
 func (p *plugin) handleDeviceUpdate(deviceId string, timestamp time.Time, traits googleapi.RawMessage) {
+	p.lastPubSubMessageTime = timestamp
+
 	existing, known := p.thermostats[deviceId]
 
 	if !known {
@@ -309,7 +339,7 @@ func (p *plugin) handleDeviceUpdate(deviceId string, timestamp time.Time, traits
 	parsedTraits, err := sdm.ParseTraits(traits)
 
 	if err != nil {
-		fmt.Printf("%T Failed to parse traits for thermostat %s: %v\n", p, deviceId, err)
+		p.recordError(fmt.Errorf("sdm processing: failed to parse traits for thermostat %s: %w", deviceId, err))
 		return
 	}
 
@@ -378,7 +408,13 @@ func (p *plugin) getStatusAndEntities() common.StatusAndEntities {
 
 	return common.StatusAndEntities{
 		Status: data.PluginStatus{
-			GoogleUser: p.googleUser,
+			GoogleUser:               p.googleUser,
+			HasRefreshToken:          p.oauthRefreshToken != "",
+			RefreshTokenObtainedTime: p.oauthRefreshTokenObtainedTime,
+			LastPollTime:             p.lastPollTime,
+			LastPubSubMessageTime:    p.lastPubSubMessageTime,
+			LastErrorMessage:         p.lastErrorMessage,
+			LastErrorTime:            p.lastErrorTime,
 		},
 		Thermostats: thermostats,
 	}
@@ -515,16 +551,28 @@ func (p *plugin) onExchangeCodeForTokenComplete(attempt *oauthAttempt, token *oa
 	p.oauthAttempt = nil
 
 	if err != nil {
+		p.recordError(fmt.Errorf("token exchange failed: %w", err))
 		return fmt.Errorf("onExchangeCodeForTokenComplete failed, code exchange failed, err=%v", err)
 	}
 
 	p.oauthClientToken = token
 	p.oauthRefreshToken = token.RefreshToken
+	p.oauthRefreshTokenObtainedTime = time.Now()
 	p.oauthClientScope = scope
 
 	p.saveConfig()
 
 	return nil
+}
+
+// recordError records err as the plugin's most recent error, for status-page display (see
+// data.PluginStatus). Always called on the plugin's own mailbox goroutine — either directly, for errors
+// arising from code already running there, or via EnqueueOnPluginGoRoutine, for errors arising on a
+// worker's own background goroutine (the poller and pubsub subscriber) — so no locking is needed.
+func (p *plugin) recordError(err error) {
+	p.lastErrorMessage = err.Error()
+	p.lastErrorTime = time.Now()
+	fmt.Printf("%T Error: %v\n", p, err)
 }
 
 // saveConfig builds a snapshot of the current persistent config on the plugin's own mailbox goroutine
@@ -538,6 +586,7 @@ func (p *plugin) saveConfig() {
 		AccessTokenExpirationTime: p.oauthClientToken.Expiry,
 		AccessTokenScopes:         []string{p.oauthClientScope},
 		RefreshToken:              p.oauthClientToken.RefreshToken,
+		RefreshTokenObtainedTime:  p.oauthRefreshTokenObtainedTime,
 	}
 
 	err := p.saveQueue.Send(func() {

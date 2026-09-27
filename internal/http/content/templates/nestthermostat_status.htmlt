@@ -1,10 +1,61 @@
 <div class="entity-nestthermostat-status">
     <div class="container">
-        <div class="group-label">Google Account Info</div>
+        <div class="group-label">Google Account</div>
         <div class="container nowrap">
             <div class="label">User</div>
             <div class="value">{{if eq .GoogleUser ""}}Not Logged In{{else}}{{.GoogleUser}}{{end}}</div>
-            <div><button class="login-button">Login</button></div>
         </div>
+        <div class="container nowrap">
+            <div class="label">Refresh Token</div>
+            <div class="value">
+                {{if .HasRefreshToken}}
+                    <i class="bi bi-check-circle-fill token-ok"></i> Configured
+                {{else}}
+                    <i class="bi bi-x-circle-fill token-missing"></i> Not Configured
+                {{end}}
+            </div>
+        </div>
+        {{if .HasRefreshToken}}
+            <div class="container nowrap">
+                <div class="label">Obtained</div>
+                <div class="timestamp">{{.RefreshTokenObtainedTime.Format "2006-01-02 3:04:05 PM"}}</div>
+            </div>
+        {{end}}
+        <div class="container nowrap">
+            <div><button class="get-token-button">Get Token</button></div>
+        </div>
+    </div>
+    <div class="container">
+        <div class="group-label">Activity</div>
+        <div class="container nowrap">
+            <div class="label">Last Poll</div>
+            <div class="timestamp">
+                {{if .LastPollTime.IsZero}}Never{{else}}{{.LastPollTime.Format "2006-01-02 3:04:05 PM"}}{{end}}
+            </div>
+        </div>
+        <div class="container nowrap">
+            <div class="label">Last Pub/Sub Message</div>
+            <div class="timestamp">
+                {{if .LastPubSubMessageTime.IsZero}}
+                    Never
+                {{else}}
+                    {{.LastPubSubMessageTime.Format "2006-01-02 3:04:05 PM"}}
+                {{end}}
+            </div>
+        </div>
+    </div>
+    <div class="container">
+        <div class="group-label">Last Error</div>
+        <div class="container nowrap">
+            <div class="label">Time</div>
+            <div class="timestamp">
+                {{if .LastErrorTime.IsZero}}Never{{else}}{{.LastErrorTime.Format "2006-01-02 3:04:05 PM"}}{{end}}
+            </div>
+        </div>
+        {{if not .LastErrorTime.IsZero}}
+            <div class="container nowrap">
+                <div class="value monospace">{{.LastErrorMessage}}</div>
+            </div>
+        {{end}}
     </div>
 </div>

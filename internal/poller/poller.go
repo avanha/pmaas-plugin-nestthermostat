@@ -3,7 +3,6 @@ package poller
 import (
 	"context"
 	"fmt"
-	"sync/atomic"
 	"time"
 
 	"github.com/avanha/pmaas-plugin-nestthermostat/internal/sdm"
@@ -21,13 +20,15 @@ import (
 func NewPoller(
 	sdmClientOptions sdm.ClientOptions,
 	refreshTokenFn func() string,
-	deviceListHandlerFn func(fetchTime time.Time, devices []sdm.DeviceTraits)) *Poller {
+	deviceListHandlerFn func(fetchTime time.Time, devices []sdm.DeviceTraits),
+	errorHandlerFn func(err error)) *Poller {
 	return &Poller{
 		initialDelaySeconds: 30,
 		intervalMinutes:     60,
 		sdmClientOptions:    sdmClientOptions,
 		refreshTokenFn:      refreshTokenFn,
 		deviceListHandlerFn: deviceListHandlerFn,
+		errorHandlerFn:      errorHandlerFn,
 	}
 }
 
@@ -37,8 +38,8 @@ type Poller struct {
 	initialDelaySeconds int
 	intervalMinutes     time.Duration
 	deviceListHandlerFn func(fetchTime time.Time, devices []sdm.DeviceTraits)
+	errorHandlerFn      func(err error)
 	sdmClient           *sdm.Client
-	err                 atomic.Value
 }
 
 func (p *Poller) Run(ctx context.Context) {
@@ -81,9 +82,7 @@ func (p *Poller) ensureClient(ctx context.Context) bool {
 	sdmClient, err := sdm.NewClient(ctx, options)
 
 	if err != nil {
-		clientCreateError := fmt.Errorf("unable to create sdm client: %w", err)
-		p.err.Store(clientCreateError)
-		fmt.Printf("Poller failed: %v\n", clientCreateError)
+		p.errorHandlerFn(fmt.Errorf("poll: unable to create sdm client: %w", err))
 		return false
 	}
 
@@ -130,8 +129,7 @@ func (p *Poller) poll(ctx context.Context) {
 	devices, err := p.sdmClient.FetchDevices(ctx)
 
 	if err != nil {
-		fmt.Printf("Error fetching devices: %v\n", err)
-		p.err.Store(err)
+		p.errorHandlerFn(fmt.Errorf("poll: error fetching devices: %w", err))
 		return
 	}
 

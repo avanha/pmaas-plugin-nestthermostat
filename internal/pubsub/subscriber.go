@@ -4,8 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
-	"sync/atomic"
 	"time"
 
 	pubsub "cloud.google.com/go/pubsub/v2"
@@ -39,13 +37,15 @@ type Subscriber struct {
 	options             SubscriberOptions
 	subscriptionID      string
 	deviceUpdateHandler Callback
-	lastError           atomic.Value
+	errorHandlerFn      func(err error)
 }
 
-func NewSubscriber(options SubscriberOptions, deviceUpdateHandler Callback) *Subscriber {
+func NewSubscriber(
+	options SubscriberOptions, deviceUpdateHandler Callback, errorHandlerFn func(err error)) *Subscriber {
 	return &Subscriber{
 		options:             options,
 		deviceUpdateHandler: deviceUpdateHandler,
+		errorHandlerFn:      errorHandlerFn,
 	}
 }
 
@@ -56,15 +56,14 @@ func (s *Subscriber) Run(ctx context.Context) {
 		option.WithAuthCredentialsJSON(option.ServiceAccount, s.options.ServiceAccountCreds))
 
 	if err != nil {
-		fmt.Printf("Failed to  create pubsub client: %v\n", err)
-		s.lastError.Store(fmt.Errorf("failed to create pubsub client: %w", err))
+		s.errorHandlerFn(fmt.Errorf("pubsub: failed to create pubsub client: %w", err))
 		return
 	}
 
 	defer func() {
 		err := client.Close()
 		if err != nil {
-			s.lastError.Store(fmt.Errorf("failed to close pubsub client: %w", err))
+			s.errorHandlerFn(fmt.Errorf("pubsub: failed to close pubsub client: %w", err))
 		}
 	}()
 
@@ -74,8 +73,7 @@ func (s *Subscriber) Run(ctx context.Context) {
 	err = subscription.Receive(ctx, s.onMessageReceived)
 
 	if err != nil {
-		fmt.Printf("PubSub receive error: %v\n", err)
-		s.lastError.Store(fmt.Errorf("pubsub receive error: %w", err))
+		s.errorHandlerFn(fmt.Errorf("pubsub: receive error: %w", err))
 	}
 
 	fmt.Printf("PubSub subscriber stopped\n")
@@ -87,8 +85,7 @@ func (s *Subscriber) onMessageReceived(ctx context.Context, msg *pubsub.Message)
 	var payload MessagePayload
 
 	if err := json.Unmarshal(msg.Data, &payload); err != nil {
-		log.Printf("Error unmarshaling pubsub message: %v", err)
-		s.lastError.Store(fmt.Errorf("error unmarshalling pubsub message: %w", err))
+		s.errorHandlerFn(fmt.Errorf("pubsub: error unmarshalling message: %w", err))
 		return
 	}
 
