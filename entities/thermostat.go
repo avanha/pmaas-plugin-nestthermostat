@@ -204,6 +204,6 @@ func NestThermostatDataToInsertArgs(anyData *any) ([]any, error) {
 	d := (*anyData).(NestThermostatData)
 	return []any{
 		d.Temperature, d.Humidity, d.HvacStatus, d.Mode, d.EcoMode, d.HeatSetpoint, d.CoolSetpoint,
-		d.Connectivity.String(), d.LastUpdateTime,
+		d.Connectivity, d.LastUpdateTime,
 	}, nil
 }
