@@ -41,6 +41,12 @@
     color: grey;
 }
 
+/* bi-snow's default strokes are thin enough that its blue .configured color is hard to make out — the
+   icon font has no bold weight of its own, so this fakes one with an outline stroke on top of the glyph. */
+.entity-nestthermostat-thermostat .title-row .mode-icons .cool-icon {
+    -webkit-text-stroke: 1px currentColor;
+}
+
 .entity-nestthermostat-thermostat .title-row .mode-icons .heat-icon.configured {
     color: #d9534f;
 }
