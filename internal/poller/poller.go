@@ -38,6 +38,7 @@ func NewPoller(
 		deviceListHandlerFn: deviceListHandlerFn,
 		userInfoHandlerFn:   userInfoHandlerFn,
 		errorHandlerFn:      errorHandlerFn,
+		triggerCh:           make(chan struct{}, 1),
 	}
 }
 
@@ -53,6 +54,24 @@ type Poller struct {
 	// lastUserInfoFetchTime is zero until the first successful user info fetch. See
 	// maybeRefreshUserInfo/userInfoRefreshInterval.
 	lastUserInfoFetchTime time.Time
+	// triggerCh receives a signal from TriggerPoll. Buffered by 1 so a trigger arriving while a poll is
+	// already in flight is queued rather than dropped, but a second trigger before the first is consumed
+	// is a no-op rather than piling up.
+	triggerCh chan struct{}
+}
+
+// TriggerPoll requests an immediate poll cycle rather than waiting for the next scheduled tick, and
+// discards the current SDM client first so the new cycle re-authenticates from scratch with whatever
+// refresh token is current — e.g. after a successful OAuth token exchange, so a freshly (re)authorized
+// token (which may grant access to additional devices, in the "force the flow to pick up new devices"
+// case — see plugin.go's "Get Token" button) takes effect immediately, rather than sitting unused for up
+// to an hour, or indefinitely if a client built from an older token was already running. Safe to call
+// from any goroutine; a no-op if a trigger is already pending.
+func (p *Poller) TriggerPoll() {
+	select {
+	case p.triggerCh <- struct{}{}:
+	default:
+	}
 }
 
 func (p *Poller) Run(ctx context.Context) {
@@ -131,6 +150,10 @@ func (p *Poller) waitForTimer(ctx context.Context, timer *time.Timer) bool {
 			return false
 		case <-timer.C:
 			return true
+		case <-p.triggerCh:
+			timer.Stop()
+			p.resetForTrigger()
+			return true
 		}
 	}
 }
@@ -142,8 +165,24 @@ func (p *Poller) waitForTick(ctx context.Context, ticker *time.Ticker) bool {
 			return false
 		case <-ticker.C:
 			return true
+		case <-p.triggerCh:
+			// Reset so the regular schedule restarts from this triggered poll, rather than the next
+			// regularly-scheduled tick landing right on top of it.
+			ticker.Reset(time.Duration(p.intervalMinutes) * time.Minute)
+			p.resetForTrigger()
+			return true
 		}
 	}
+}
+
+// resetForTrigger discards state tied to the old refresh token/client, so the poll cycle TriggerPoll is
+// about to cause rebuilds everything from scratch — including user info, since a re-authorization could
+// just as easily be for a different Google account entirely. Always called from the poller's own
+// goroutine (via waitForTimer/waitForTick), same as every other access to this state, so this is safe
+// despite TriggerPoll itself being callable from elsewhere.
+func (p *Poller) resetForTrigger() {
+	p.sdmClient = nil
+	p.lastUserInfoFetchTime = time.Time{}
 }
 
 func (p *Poller) poll(ctx context.Context) {

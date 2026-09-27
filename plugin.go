@@ -52,6 +52,10 @@ type plugin struct {
 	config      config.PluginConfig
 	httpHandler *http.Handler
 	thermostats map[string]*entities.NestThermostat
+	// poller is retained so onExchangeCodeForTokenComplete can call TriggerPoll on it after a successful
+	// token exchange, rather than leaving a freshly (re)authorized token to sit unused until the next
+	// scheduled tick.
+	poller *poller2.Poller
 	// anonymousThermostatCounter generates unique suffixes for placeholder thermostat names (see
 	// nextPlaceholderThermostatName). Only ever touched on the plugin's own mailbox goroutine.
 	anonymousThermostatCounter    int
@@ -192,6 +196,7 @@ func (p *plugin) Start() {
 				fmt.Printf("%T Failed to enqueue poll error (%v): %v\n", p, pollErr, err)
 			}
 		})
+	p.poller = poller
 	p.workersWg.Go(func() { poller.Run(ctx) })
 
 	subscriber := pubsub.NewSubscriber(
@@ -595,6 +600,13 @@ func (p *plugin) onExchangeCodeForTokenComplete(attempt *oauthAttempt, token *oa
 	p.oauthClientScope = scope
 
 	p.saveConfig()
+
+	// p.poller is nil only if Start hasn't run yet, which shouldn't be reachable here in practice (PMAAS
+	// only starts accepting HTTP connections, including this OAuth callback, once every plugin's Start
+	// has already run), but costs nothing to guard against.
+	if p.poller != nil {
+		p.poller.TriggerPoll()
+	}
 
 	return nil
 }
