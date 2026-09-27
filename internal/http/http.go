@@ -29,9 +29,11 @@ var statusTemplate = spi.TemplateInfo{
 var thermostatTemplate = spi.TemplateInfo{
 	Name: "nestthermostat_thermostat",
 	FuncMap: template.FuncMap{
-		"CelsiusToFahrenheit": celsiusToFahrenheit,
-		"RelativeTime":        relativeTime,
-		"IsOffline":           isOffline,
+		"CelsiusToFahrenheit":    celsiusToFahrenheit,
+		"RelativeTime":           relativeTime,
+		"IsOffline":              isOffline,
+		"IsOnline":               isOnline,
+		"FormatConnectivityTime": formatConnectivityTime,
 	},
 	Paths:   []string{"templates/nestthermostat_thermostat.htmlt"},
 	Styles:  []string{"css/nestthermostat_thermostat.css"},
@@ -226,4 +228,19 @@ func relativeTime(timeValue time.Time) string {
 
 func isOffline(connectivity environment.Connectivity) bool {
 	return connectivity == environment.ConnectivityOffline
+}
+
+func isOnline(connectivity environment.Connectivity) bool {
+	return connectivity == environment.ConnectivityOnline
+}
+
+// formatConnectivityTime formats an OfflineSince/OnlineSince timestamp for display, distinguishing a
+// state that's genuinely never been observed (zero time.Time) from a real timestamp — text/template has
+// no way to test IsZero on its own.
+func formatConnectivityTime(timeValue time.Time) string {
+	if timeValue.IsZero() {
+		return "Unknown"
+	}
+
+	return timeValue.Format("2006-01-02 3:04:05 PM")
 }

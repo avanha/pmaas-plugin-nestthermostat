@@ -22,9 +22,11 @@ type ThermostatData struct {
 	EcoMode      string
 	HeatSetpoint float32
 	CoolSetpoint float32
-	// OfflineSince is when Connectivity last transitioned to environment.ConnectivityOffline; zero if
-	// it's never been observed offline (meaningless while Connectivity != ConnectivityOffline).
+	// OfflineSince and OnlineSince are when Connectivity last transitioned to
+	// environment.ConnectivityOffline/ConnectivityOnline respectively; zero if that state has never been
+	// observed.
 	Connectivity   environment.Connectivity
 	OfflineSince   time.Time
+	OnlineSince    time.Time
 	LastUpdateTime time.Time
 }

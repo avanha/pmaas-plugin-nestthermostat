@@ -65,15 +65,17 @@ type NestThermostat struct {
 	// Connectivity is "ONLINE" or "OFFLINE" (sdm.devices.traits.Connectivity).
 	Connectivity lww.Register[string]
 
-	// OfflineSince is when Connectivity last transitioned to "OFFLINE" — not a last-write-wins
-	// register like the fields above, since it's a derived transition marker rather than a directly
-	// received value: a poll reports the full trait set every time, so if this were tracked the same
-	// way as Connectivity itself, "still offline" would keep re-stamping it with the current poll time
-	// instead of preserving the actual moment it went offline. See sdm.ApplyTraits. Zero value means
-	// it's never been observed offline. Deliberately excluded from GetUpdateTimeTrackedFields: it's not
-	// a data-freshness signal, and including it would make a stale, disconnected device's LastUpdateTime
-	// look artificially recent just because we noticed it went offline recently.
+	// OfflineSince and OnlineSince are when Connectivity last transitioned to "OFFLINE"/"ONLINE"
+	// respectively — not last-write-wins registers like the fields above, since each is a derived
+	// transition marker rather than a directly received value: a poll reports the full trait set every
+	// time, so if these were tracked the same way as Connectivity itself, "still offline" (or "still
+	// online") would keep re-stamping them with the current poll time instead of preserving the actual
+	// moment the transition happened. See sdm.ApplyTraits. Zero value means that state has never been
+	// observed. Deliberately excluded from GetUpdateTimeTrackedFields: neither is a data-freshness
+	// signal, and including them would make a stale, disconnected device's LastUpdateTime look
+	// artificially recent just because we noticed a connectivity transition recently.
 	OfflineSince time.Time
+	OnlineSince  time.Time
 
 	// PmaasEntityId is the id returned by IPMAASContainer.RegisterEntity once this thermostat has been
 	// registered. Empty until then.
@@ -174,6 +176,7 @@ func (t *NestThermostat) GetThermostatData() environment.Thermostat {
 		CoolSetpoint:   t.CoolSetpoint.Value,
 		Connectivity:   connectivityFromStatus(t.Connectivity.Value),
 		OfflineSince:   t.OfflineSince,
+		OnlineSince:    t.OnlineSince,
 		LastUpdateTime: t.LastUpdateTime(),
 	}
 }
@@ -196,6 +199,7 @@ func (t *NestThermostat) GetDisplayData() data.ThermostatData {
 		CoolSetpoint:   t.CoolSetpoint.Value,
 		Connectivity:   connectivityFromStatus(t.Connectivity.Value),
 		OfflineSince:   t.OfflineSince,
+		OnlineSince:    t.OnlineSince,
 		LastUpdateTime: t.LastUpdateTime(),
 	}
 }

@@ -27,6 +27,9 @@
     margin-left: 8px;
 }
 
+/* Grey (off) means Mode doesn't include this function at all. Colored (.configured, same red/blue as the
+   setpoint values below) means Mode includes it but it isn't running right now. The background highlight
+   (.active) means it's actually running right now (HvacStatus), independent of .configured. */
 .entity-nestthermostat-thermostat .title-row .mode-icons .heat-icon,
 .entity-nestthermostat-thermostat .title-row .mode-icons .cool-icon {
     display: inline-flex;
@@ -36,6 +39,14 @@
     height: 22px;
     border-radius: 4px;
     color: grey;
+}
+
+.entity-nestthermostat-thermostat .title-row .mode-icons .heat-icon.configured {
+    color: #d9534f;
+}
+
+.entity-nestthermostat-thermostat .title-row .mode-icons .cool-icon.configured {
+    color: #337ab7;
 }
 
 .entity-nestthermostat-thermostat .title-row .mode-icons .heat-icon.active {
@@ -52,8 +63,12 @@
     color: #5cb85c;
 }
 
-.entity-nestthermostat-thermostat .title-row .mode-icons .offline-icon {
+.entity-nestthermostat-thermostat .title-row .mode-icons .connectivity-icon.offline {
     color: #d9534f;
+}
+
+.entity-nestthermostat-thermostat .title-row .mode-icons .connectivity-icon.online {
+    color: #5cb85c;
 }
 
 .entity-nestthermostat-thermostat .sensor-data {
@@ -77,12 +92,16 @@
     margin-left: 10px !important;
 }
 
-.entity-nestthermostat-thermostat .sensor-data .setpoint.heat {
+.entity-nestthermostat-thermostat .sensor-data .setpoint .heat {
     color: #d9534f;
 }
 
-.entity-nestthermostat-thermostat .sensor-data .setpoint.cool {
+.entity-nestthermostat-thermostat .sensor-data .setpoint .cool {
     color: #337ab7;
+}
+
+.entity-nestthermostat-thermostat .sensor-data .setpoint .separator {
+    color: grey;
 }
 
 .entity-nestthermostat-thermostat .sensor-data .timestamp {

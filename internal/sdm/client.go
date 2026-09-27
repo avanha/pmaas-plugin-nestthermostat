@@ -220,12 +220,20 @@ func ApplyTraits(t *entities.NestThermostat, timestamp time.Time, traits *Traits
 		}
 	}
 
-	// A poll reports the full trait set every time, so "Connectivity is OFFLINE" would otherwise be
-	// re-applied (and its lww.Register's UpdateTime pushed forward) on every single poll the device
-	// remains offline for — that would make OfflineSince track "the last time we happened to check",
-	// not the actual moment it went offline. Only record a fresh OfflineSince on the actual transition.
+	// A poll reports the full trait set every time, so "Connectivity is OFFLINE" (or "is ONLINE") would
+	// otherwise be re-applied (and its lww.Register's UpdateTime pushed forward) on every single poll the
+	// device remains in that state for — that would make OfflineSince/OnlineSince track "the last time we
+	// happened to check", not the actual moment the transition happened. Only record a fresh timestamp on
+	// the actual transition. previousConnectivity's zero value ("") means neither branch fires on a
+	// device's very first observed status, which is deliberate: whichever state wasn't the first one
+	// observed correctly stays zero ("never observed"), exactly matching the other branch firing for the
+	// state that was.
 	if previousConnectivity != "OFFLINE" && t.Connectivity.Value == "OFFLINE" {
 		t.OfflineSince = timestamp
+	}
+
+	if previousConnectivity != "ONLINE" && t.Connectivity.Value == "ONLINE" {
+		t.OnlineSince = timestamp
 	}
 
 	return applied
