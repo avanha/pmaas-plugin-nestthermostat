@@ -29,6 +29,7 @@ import (
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/google"
 	"google.golang.org/api/googleapi"
+	oauth2v2 "google.golang.org/api/oauth2/v2"
 	smartdevicemanagement "google.golang.org/api/smartdevicemanagement/v1"
 )
 
@@ -57,6 +58,7 @@ type plugin struct {
 	cancelWorkers                 context.CancelFunc
 	workersWg                     sync.WaitGroup
 	googleUser                    string
+	googleUserPicture             string
 	oauthClientConfig             *oauth2.Config
 	oauthAttempt                  *oauthAttempt
 	oauthClientToken              *oauth2.Token
@@ -113,7 +115,15 @@ func (p *plugin) Init(container spi.IPMAASContainer) {
 	p.container = container
 	p.saveQueue = mailbox.NewConflatingMailbox()
 
-	oauthClientConfig, err := google.ConfigFromJSON(p.config.OAuthClientConfig, smartdevicemanagement.SdmServiceScope)
+	// The userinfo.email/userinfo.profile scopes are what let FetchUserInfo (see internal/sdm.Client)
+	// resolve the logged-in Google account's email and profile picture for the status page — a refresh
+	// token obtained before these scopes were added won't have them, and FetchUserInfo will fail for it
+	// until the user re-runs the OAuth/PCM consent flow (the "Get Token" button forces reconsent).
+	oauthClientConfig, err := google.ConfigFromJSON(
+		p.config.OAuthClientConfig,
+		smartdevicemanagement.SdmServiceScope,
+		oauth2v2.UserinfoEmailScope,
+		oauth2v2.UserinfoProfileScope)
 	if err != nil {
 		panic(fmt.Errorf("%T Failed to create OAuth client config: %v", p, err))
 	}
@@ -166,6 +176,13 @@ func (p *plugin) Start() {
 
 			if err != nil {
 				fmt.Printf("%T Failed to enqueue device list update: %v\n", p, err)
+			}
+		},
+		func(userInfo sdm.UserInfo) {
+			err := p.container.EnqueueOnPluginGoRoutine(func() { p.handleUserInfoUpdate(userInfo) })
+
+			if err != nil {
+				fmt.Printf("%T Failed to enqueue user info update: %v\n", p, err)
 			}
 		},
 		func(pollErr error) {
@@ -279,6 +296,22 @@ func (p *plugin) handleDeviceList(fetchTime time.Time, devices []sdm.DeviceTrait
 			p.broadcastThermostatStateChanged(existing)
 		}
 	}
+}
+
+// handleUserInfoUpdate records the logged-in Google account's email/profile picture for status-page
+// display. Called separately from handleDeviceList (rather than as an extra parameter on it) since the
+// two are independent: the poller only refreshes user info occasionally (see
+// poller.userInfoRefreshInterval), not on every device poll. Runs on the plugin's own mailbox goroutine.
+func (p *plugin) handleUserInfoUpdate(userInfo sdm.UserInfo) {
+	// Guards against ever clobbering a previously-known-good value with an empty one — shouldn't
+	// actually happen given the poller only calls this on a successful fetch, but costs nothing to be
+	// defensive about here too.
+	if userInfo.Email == "" {
+		return
+	}
+
+	p.googleUser = userInfo.Email
+	p.googleUserPicture = userInfo.Picture
 }
 
 // registerNewThermostat registers t as a new entity and, once that succeeds, starts tracking it in
@@ -409,6 +442,7 @@ func (p *plugin) getStatusAndEntities() common.StatusAndEntities {
 	return common.StatusAndEntities{
 		Status: data.PluginStatus{
 			GoogleUser:               p.googleUser,
+			GoogleUserPicture:        p.googleUserPicture,
 			HasRefreshToken:          p.oauthRefreshToken != "",
 			RefreshTokenObtainedTime: p.oauthRefreshTokenObtainedTime,
 			LastPollTime:             p.lastPollTime,

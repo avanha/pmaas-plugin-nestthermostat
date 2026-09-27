@@ -39,6 +39,18 @@
     content: " - ";
 }
 
+.entity-nestthermostat-status .user-value {
+    display: inline-flex;
+    align-items: center;
+}
+
+.entity-nestthermostat-status .profile-pic {
+    width: 20px;
+    height: 20px;
+    border-radius: 50%;
+    margin-right: 6px;
+}
+
 .entity-nestthermostat-status .token-ok {
     color: #5cb85c;
 }

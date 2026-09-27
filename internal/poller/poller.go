@@ -8,6 +8,13 @@ import (
 	"github.com/avanha/pmaas-plugin-nestthermostat/internal/sdm"
 )
 
+// userInfoRefreshInterval bounds how often maybeRefreshUserInfo actually fetches user info, checked as
+// part of each regular poll rather than on a separate timer of its own: the user's Google account
+// email/profile picture changing is rare enough that exact timing doesn't matter, and a fetch is cheap
+// enough that it doesn't need its own dedicated schedule — just a "don't bother more often than this"
+// floor, so it doesn't add an extra API call to every single hourly poll.
+const userInfoRefreshInterval = 4 * time.Hour
+
 // NewPoller creates a Poller. sdmClientOptions supplies the static SDM client identity (ClientId,
 // ClientSecret, SdmProjectID); its RefreshToken field is ignored — refreshTokenFn is consulted instead,
 // every time the poller needs to (re)create its SDM client, since the refresh token may not exist yet
@@ -21,6 +28,7 @@ func NewPoller(
 	sdmClientOptions sdm.ClientOptions,
 	refreshTokenFn func() string,
 	deviceListHandlerFn func(fetchTime time.Time, devices []sdm.DeviceTraits),
+	userInfoHandlerFn func(userInfo sdm.UserInfo),
 	errorHandlerFn func(err error)) *Poller {
 	return &Poller{
 		initialDelaySeconds: 30,
@@ -28,6 +36,7 @@ func NewPoller(
 		sdmClientOptions:    sdmClientOptions,
 		refreshTokenFn:      refreshTokenFn,
 		deviceListHandlerFn: deviceListHandlerFn,
+		userInfoHandlerFn:   userInfoHandlerFn,
 		errorHandlerFn:      errorHandlerFn,
 	}
 }
@@ -38,8 +47,12 @@ type Poller struct {
 	initialDelaySeconds int
 	intervalMinutes     time.Duration
 	deviceListHandlerFn func(fetchTime time.Time, devices []sdm.DeviceTraits)
+	userInfoHandlerFn   func(userInfo sdm.UserInfo)
 	errorHandlerFn      func(err error)
 	sdmClient           *sdm.Client
+	// lastUserInfoFetchTime is zero until the first successful user info fetch. See
+	// maybeRefreshUserInfo/userInfoRefreshInterval.
+	lastUserInfoFetchTime time.Time
 }
 
 func (p *Poller) Run(ctx context.Context) {
@@ -86,16 +99,28 @@ func (p *Poller) ensureClient(ctx context.Context) bool {
 		return false
 	}
 
-	//userInfo, err := sdmClient.FetchUserInfo(ctx)
-	//
-	//if err == nil {
-	//	fmt.Printf("Current user: %s\n", userInfo.Email)
-	//} else {
-	//	fmt.Printf("Error retrieving user: %v\n", err)
-	//}
-
 	p.sdmClient = sdmClient
 	return true
+}
+
+// maybeRefreshUserInfo fetches the current user info if it's never been fetched, or if
+// userInfoRefreshInterval has elapsed since the last fetch. A failed fetch doesn't prevent device polling
+// from proceeding — it's just surfaced as an error, and left to retry on the next poll (rather than
+// immediately) — the same rationale as the refresh interval itself: nothing about this needs to be fast.
+func (p *Poller) maybeRefreshUserInfo(ctx context.Context) {
+	if !p.lastUserInfoFetchTime.IsZero() && time.Since(p.lastUserInfoFetchTime) < userInfoRefreshInterval {
+		return
+	}
+
+	userInfo, err := p.sdmClient.FetchUserInfo(ctx)
+
+	if err != nil {
+		p.errorHandlerFn(fmt.Errorf("poll: unable to fetch user info: %w", err))
+		return
+	}
+
+	p.lastUserInfoFetchTime = time.Now()
+	p.userInfoHandlerFn(userInfo)
 }
 
 func (p *Poller) waitForTimer(ctx context.Context, timer *time.Timer) bool {
@@ -125,6 +150,8 @@ func (p *Poller) poll(ctx context.Context) {
 	if !p.ensureClient(ctx) {
 		return
 	}
+
+	p.maybeRefreshUserInfo(ctx)
 
 	devices, err := p.sdmClient.FetchDevices(ctx)
 

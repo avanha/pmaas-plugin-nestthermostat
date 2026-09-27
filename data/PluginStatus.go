@@ -4,6 +4,9 @@ import "time"
 
 type PluginStatus struct {
 	GoogleUser string
+	// GoogleUserPicture is a URL to the logged-in user's Google account profile picture, or empty if
+	// they don't have one or GoogleUser itself is empty.
+	GoogleUserPicture string
 
 	// HasRefreshToken and RefreshTokenObtainedTime reflect whether an OAuth refresh token is currently
 	// configured and, if so, when it was last obtained — RefreshTokenObtainedTime is meaningless while

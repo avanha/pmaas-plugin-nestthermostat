@@ -13,6 +13,7 @@ import (
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/google"
 	"google.golang.org/api/googleapi"
+	oauth2v2 "google.golang.org/api/oauth2/v2"
 	"google.golang.org/api/option"
 	smartdevicemanagement "google.golang.org/api/smartdevicemanagement/v1"
 )
@@ -25,7 +26,9 @@ type ClientOptions struct {
 }
 
 type UserInfo struct {
-	Email string `json:"email"`
+	Email string
+	// Picture is a URL to the user's Google account profile picture, or empty if they don't have one.
+	Picture string
 }
 
 // Traits mirror the subset of SDM device trait namespaces this plugin understands. Every field is a
@@ -240,9 +243,10 @@ func ApplyTraits(t *entities.NestThermostat, timestamp time.Time, traits *Traits
 }
 
 type Client struct {
-	httpClient *http.Client
-	service    *smartdevicemanagement.Service
-	options    ClientOptions
+	httpClient      *http.Client
+	service         *smartdevicemanagement.Service
+	userInfoService *oauth2v2.Service
+	options         ClientOptions
 }
 
 func NewClient(ctx context.Context, options ClientOptions) (*Client, error) {
@@ -268,31 +272,32 @@ func NewClient(ctx context.Context, options ClientOptions) (*Client, error) {
 		return nil, fmt.Errorf("failed to create SDM service: %w", err)
 	}
 
+	// Reuses the same OAuth-authenticated httpClient as service above, so this needs no separate
+	// credentials of its own — it just requires the refresh token to actually have been granted the
+	// userinfo.email/userinfo.profile scopes (see plugin.go's Init), which a refresh token obtained
+	// before those scopes were added won't have; FetchUserInfo will fail for such a token until the
+	// user re-runs the OAuth/PCM consent flow.
+	userInfoService, err := oauth2v2.NewService(ctx, option.WithHTTPClient(httpClient))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create userinfo service: %w", err)
+	}
+
 	return &Client{
-		httpClient: httpClient,
-		service:    service,
-		options:    options,
+		httpClient:      httpClient,
+		service:         service,
+		userInfoService: userInfoService,
+		options:         options,
 	}, nil
 }
 
 func (c *Client) FetchUserInfo(ctx context.Context) (UserInfo, error) {
-	resp, err := c.httpClient.Get("https://www.googleapis.com/oauth2/v3/userinfo")
+	userinfo, err := c.userInfoService.Userinfo.Get().Context(ctx).Do()
 
 	if err != nil {
-		return UserInfo{}, err
+		return UserInfo{}, fmt.Errorf("failed to fetch userinfo: %w", err)
 	}
 
-	defer func() {
-		err := resp.Body.Close()
-		fmt.Println("Error closing response body: ", err)
-	}()
-
-	var info UserInfo
-	if err := json.NewDecoder(resp.Body).Decode(&info); err != nil {
-		return info, err
-	}
-
-	return info, nil
+	return UserInfo{Email: userinfo.Email, Picture: userinfo.Picture}, nil
 }
 
 // DeviceTraits pairs a device id with its parsed traits. FetchDevices hands these back raw (rather than
