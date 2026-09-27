@@ -28,9 +28,9 @@ type UserInfo struct {
 	Email string `json:"email"`
 }
 
-// Traits mirrors the subset of SDM device trait namespaces this plugin understands. Every field is a
+// Traits mirror the subset of SDM device trait namespaces this plugin understands. Every field is a
 // pointer so ParseTraits/ApplyTraits can tell "this trait wasn't included in this update" (nil) apart
-// from "this trait was included, and its value happens to be zero" — which matters because pubsub
+// from "this trait was included, and its value happens to be zero".  Importants because pubsub
 // device-update messages only carry the traits that actually changed, not a full snapshot, while
 // FetchDevices' response carries all of them. See ApplyTraits.
 type Traits struct {
@@ -42,12 +42,10 @@ type Traits struct {
 	ThermostatEco                 *ThermostatEcoTrait                 `json:"sdm.devices.traits.ThermostatEco,omitempty"`
 	ThermostatTemperatureSetpoint *ThermostatTemperatureSetpointTrait `json:"sdm.devices.traits.ThermostatTemperatureSetpoint,omitempty"`
 
-	// RoomName isn't an SDM trait at all — it's derived by FetchDevices from the device's
-	// ParentRelations (its room/structure assignment), and used as a fallback display name for when
-	// Info.CustomName isn't set (SDM's customName only reflects an explicit "Label" set in the Nest
-	// app, not the "Where"/room assignment most devices actually have). Always nil for Traits parsed
-	// from a pubsub message, since that payload doesn't carry room assignment at all.
-	RoomName *string `json:"-"`
+	// RoomName isn't actually an SDM trait. — it's derived by FetchDevices from the device's
+	// ParentRelations (its room/structure assignment). Always nil for Traits parsed
+	// from a pubsub message.
+	FallbackName *string `json:"-"`
 }
 
 type InfoTrait struct {
@@ -123,21 +121,15 @@ func (f traitField[T]) apply(timestamp time.Time, traits *Traits) bool {
 	return f.register.Set(timestamp, value)
 }
 
-// applier lets a set of traitField[T] instances — each closed over whatever T that particular field
-// happens to be — be applied uniformly in a loop, despite not being the same instantiated type.
+// applier lets a set of traitField[T] instances be applied uniformly in a loop, independent of the type of T.
 type applier interface {
 	apply(timestamp time.Time, traits *Traits) bool
 }
 
-// ApplyTraits copies whatever trait fields are present in traits onto t, via t's lww.Register fields —
-// each is set independently, gated on its own last-recorded time, not on t's overall LastUpdateTime.
-// That distinction matters because traits update independently of each other on the device, and neither
-// polling nor pubsub delivery guarantees messages arrive in the order the underlying changes actually
-// happened: an update carrying only a Temperature change can legitimately have an earlier timestamp
-// than the last Humidity update this thermostat received, without being stale itself. A trait absent
-// from traits (nil) is always left untouched. Name is additionally never applied while t.NameLocked is
-// set — a locally-configured name always wins over whatever the device itself reports, regardless of
-// timestamp. Returns true if anything was actually applied.
+// ApplyTraits copies whatever trait fields are present in traits onto a NestThermostat.
+// Thermostat attributes maintain a last update timestamp and only accept values when the timestamp is newer than the
+// last update time. Absent traits (nil) are ignored.  In addition, Name is skipped if t.NameLocked is set.
+// When unlocked, the Name itself is sourced from the Info.CustomName with extra fallback logic if CustomNmae is blank.
 func ApplyTraits(t *entities.NestThermostat, timestamp time.Time, traits *Traits) bool {
 	fields := []applier{
 		traitField[string]{&t.Name, func(traits *Traits) (string, bool) {
@@ -149,8 +141,8 @@ func ApplyTraits(t *entities.NestThermostat, timestamp time.Time, traits *Traits
 				return traits.Info.CustomName, true
 			}
 
-			if traits.RoomName != nil && *traits.RoomName != "" {
-				return *traits.RoomName, true
+			if traits.FallbackName != nil && *traits.FallbackName != "" {
+				return *traits.FallbackName, true
 			}
 
 			return "", false
@@ -296,8 +288,8 @@ func (c *Client) FetchDevices(ctx context.Context) ([]DeviceTraits, error) {
 			traits = &Traits{}
 		}
 
-		if roomName := roomDisplayName(dev.ParentRelations); roomName != "" {
-			traits.RoomName = &roomName
+		if fallbackName := fallbackName(dev.ParentRelations); fallbackName != "" {
+			traits.FallbackName = &fallbackName
 		}
 
 		result = append(result, DeviceTraits{Id: dev.Name, Traits: traits})
@@ -306,11 +298,11 @@ func (c *Client) FetchDevices(ctx context.Context) ([]DeviceTraits, error) {
 	return result, nil
 }
 
-// roomDisplayName derives a fallback display name for a device from its parent relations (its
+// fallbackName derives a fallback display name for a device from its parent relations (its
 // room/structure assignment) — this is what the "Where" setting in the Nest app actually reflects. It
-// prefers a room-level relation (Parent containing "/rooms/") over a bare structure-level one, since a
-// room is the more specific placement when both are present.
-func roomDisplayName(parentRelations []*smartdevicemanagement.GoogleHomeEnterpriseSdmV1ParentRelation) string {
+// prefers a room-level relation (Parent containing "/rooms/") over a  structure-level one, since a
+// room is the more specific.
+func fallbackName(parentRelations []*smartdevicemanagement.GoogleHomeEnterpriseSdmV1ParentRelation) string {
 	var structureName string
 
 	for _, relation := range parentRelations {

@@ -51,16 +51,12 @@ type NestThermostat struct {
 	PmaasEntityId string
 
 	// NameLocked is true when the name came from local configuration rather than device telemetry. A
-	// locked name is never overwritten by sdm.ApplyTraits, regardless of how new an incoming Info trait
-	// update is — the user's own configured name always wins over whatever the device itself reports.
+	// locked name is never overwritten by sdm.ApplyTraits.
 	NameLocked bool
 }
 
-// NewNestThermostat creates a thermostat with the given id and an initial name, before any trait data
-// has been applied to it (e.g. a device only pre-registered from configuration, or one just discovered
-// by a poll before sdm.ApplyTraits has run against it). nameLocked should be true only when name came
-// from local configuration; a placeholder or device-default name must always be unlocked, so a real
-// name from telemetry can still take over.
+// NewNestThermostat creates a thermostat with the given id and an initial name.
+// nameLocked prevents the given name from being overwritten by later updates
 func NewNestThermostat(id string, name string, nameLocked bool) *NestThermostat {
 	return &NestThermostat{
 		Id:         id,
@@ -69,21 +65,28 @@ func NewNestThermostat(id string, name string, nameLocked bool) *NestThermostat 
 	}
 }
 
+// GetUpdateTimeTrackedFields returns every lww.Register field on this thermostat, as the shared
+// lww.Timestamped interface (see pmaas-common/lww).
+func (t *NestThermostat) GetUpdateTimeTrackedFields() []lww.Timestamped {
+	return []lww.Timestamped{
+		&t.Name,
+		&t.Temperature,
+		&t.Humidity,
+		&t.HvacStatus,
+		&t.Mode,
+		&t.EcoMode,
+		&t.HeatSetpoint,
+		&t.CoolSetpoint,
+	}
+}
+
 // LastUpdateTime is the most recent of this thermostat's field-level update times. It's computed on
 // demand rather than stored, so it can never drift out of sync with the fields it summarizes.
 func (t *NestThermostat) LastUpdateTime() time.Time {
-	latest := t.Name.UpdateTime
+	var latest time.Time
 
-	for _, updateTime := range [...]time.Time{
-		t.Temperature.UpdateTime,
-		t.Humidity.UpdateTime,
-		t.HvacStatus.UpdateTime,
-		t.Mode.UpdateTime,
-		t.EcoMode.UpdateTime,
-		t.HeatSetpoint.UpdateTime,
-		t.CoolSetpoint.UpdateTime,
-	} {
-		if updateTime.After(latest) {
+	for _, field := range t.GetUpdateTimeTrackedFields() {
+		if updateTime := field.Timestamp(); updateTime.After(latest) {
 			latest = updateTime
 		}
 	}
