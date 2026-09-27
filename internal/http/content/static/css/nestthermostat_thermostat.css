@@ -48,11 +48,11 @@
 }
 
 .entity-nestthermostat-thermostat .title-row .mode-icons .heat-icon.configured {
-    color: #d9534f;
+    color: darkred;
 }
 
 .entity-nestthermostat-thermostat .title-row .mode-icons .cool-icon.configured {
-    color: #337ab7;
+    color: darkblue;
 }
 
 .entity-nestthermostat-thermostat .title-row .mode-icons .heat-icon.active {
@@ -61,7 +61,7 @@
 }
 
 .entity-nestthermostat-thermostat .title-row .mode-icons .cool-icon.active {
-    background-color: #337ab7;
+    background-color: darkblue;
     color: white;
 }
 
@@ -99,11 +99,11 @@
 }
 
 .entity-nestthermostat-thermostat .sensor-data .setpoint .heat {
-    color: #d9534f;
+    color: darkred;
 }
 
 .entity-nestthermostat-thermostat .sensor-data .setpoint .cool {
-    color: #337ab7;
+    color: darkblue;
 }
 
 .entity-nestthermostat-thermostat .sensor-data .setpoint .separator {
