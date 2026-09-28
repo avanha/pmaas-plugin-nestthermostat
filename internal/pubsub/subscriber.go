@@ -93,5 +93,5 @@ func (s *Subscriber) onMessageReceived(ctx context.Context, msg *pubsub.Message)
 		return
 	}
 
-	s.deviceUpdateHandler(payload.ResourceUpdate.Name, payload.Timestamp, payload.ResourceUpdate.Traits)
+	s.deviceUpdateHandler(payload.ResourceUpdate.Name, payload.Timestamp.Local(), payload.ResourceUpdate.Traits)
 }
