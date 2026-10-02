@@ -168,6 +168,9 @@ func (t *NestThermostat) GetThermostatData() environment.Thermostat {
 	return environment.Thermostat{
 		Name: t.Name.Value,
 		SensorData: environment.SensorData{
+			// Temperature is set from the very first poll/update, so its register having ever been
+			// written is what "we have a reading" means. Until then the values below are just zeros.
+			HasData:        !t.Temperature.UpdateTime.IsZero(),
 			Temperature:    t.Temperature.Value,
 			HasHumidity:    true,
 			Humidity:       t.Humidity.Value,
