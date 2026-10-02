@@ -327,16 +327,15 @@ func (p *plugin) handleUserInfoUpdate(userInfo sdm.UserInfo) {
 // p.thermostats. It's registered as an environment.IThermostat — advertising the capability, not a
 // directly-trackable entity in its own right — so the environment plugin can pick it up and re-host it
 // as a tracked, renderable entity, the same way it does for wireless thermometers advertised by the
-// bluetooth plugin. That's also why no stub factory is supplied here (nil, like bluetooth's own raw
-// device registration): nothing calls back into this specific entity directly, since the environment
-// plugin's re-hosted copy operates purely off the values already carried in the registration/state-
-// change events themselves.
+// bluetooth plugin. A stub is supplied (see entities.NestThermostat.GetStub) so a consumer that starts
+// after this thermostat was registered can read its current state, instead of waiting for the next
+// state-change event.
 func (p *plugin) registerNewThermostat(t *entities.NestThermostat) {
 	pmaasEntityId, err := p.container.RegisterEntity(
 		t.Id,
 		IThermostatType,
 		t.Name.Value,
-		nil)
+		func() (any, error) { return t.GetStub(p.container), nil })
 
 	if err != nil {
 		fmt.Printf("%T Failed to register entity for thermostat %s: %v\n", p, t.Id, err)
@@ -436,6 +435,7 @@ func (p *plugin) deregisterEntities() {
 		}
 
 		t.PmaasEntityId = ""
+		t.CloseStubIfPresent()
 	}
 }
 

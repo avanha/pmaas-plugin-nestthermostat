@@ -6,6 +6,8 @@ import (
 
 	"github.com/avanha/pmaas-common/lww"
 	"github.com/avanha/pmaas-plugin-nestthermostat/data"
+	spi "github.com/avanha/pmaas-spi"
+	spicommon "github.com/avanha/pmaas-spi/common"
 	"github.com/avanha/pmaas-spi/environment"
 	"github.com/avanha/pmaas-spi/tracking"
 )
@@ -84,6 +86,8 @@ type NestThermostat struct {
 	// NameLocked is true when the name came from local configuration rather than device telemetry. A
 	// locked name is never overwritten by sdm.ApplyTraits.
 	NameLocked bool
+
+	stub *thermostatStub
 }
 
 // NewNestThermostat creates a thermostat with the given id and an initial name.
@@ -210,4 +214,29 @@ func NestThermostatDataToInsertArgs(anyData *any) ([]any, error) {
 		d.Temperature, d.Humidity, d.HvacStatus, d.Mode, d.EcoMode, d.HeatSetpoint, d.CoolSetpoint,
 		d.Connectivity, d.LastUpdateTime,
 	}, nil
+}
+
+// GetStub returns the thread-safe environment.IThermostat handle for this thermostat, creating it on
+// first use. Not itself thread-safe: it must be called on the plugin's goroutine, which is where the
+// container invokes the entity's stub factory.
+func (t *NestThermostat) GetStub(container spi.IPMAASContainer) environment.IThermostat {
+	if t.stub == nil {
+		t.stub = newThermostatStub(
+			t.Id,
+			&spicommon.ThreadSafeEntityWrapper[environment.IThermostat]{
+				Container: container,
+				Entity:    t,
+			})
+	}
+
+	return t.stub
+}
+
+// CloseStubIfPresent invalidates the stub handed out by GetStub, if any. Call after the entity has been
+// deregistered.
+func (t *NestThermostat) CloseStubIfPresent() {
+	if t.stub != nil {
+		t.stub.close()
+		t.stub = nil
+	}
 }
