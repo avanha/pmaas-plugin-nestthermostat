@@ -20,7 +20,10 @@ import (
 var contentFS embed.FS
 
 var statusTemplate = spi.TemplateInfo{
-	Name:    "nestthermostat_status",
+	Name: "nestthermostat_status",
+	FuncMap: template.FuncMap{
+		"FormatRemaining": formatRemaining,
+	},
 	Paths:   []string{"templates/nestthermostat_status.htmlt"},
 	Styles:  []string{"css/nestthermostat_status.css"},
 	Scripts: []string{"js/nestthermostat_status.js"},
@@ -224,6 +227,34 @@ func relativeTime(timeValue time.Time) string {
 	elapsed = elapsed.Truncate(time.Hour)
 
 	return fmt.Sprintf("%vh", elapsed.Hours())
+}
+
+// formatRemaining says how far a time is from now: "in 6d 23h" for one still to come, "2h 5m ago" for
+// one that has passed. It keeps only the two most significant units, which is all anyone reading a
+// status page wants.
+func formatRemaining(t time.Time) string {
+	remaining := time.Until(t)
+
+	if remaining >= 0 {
+		return "in " + formatSpan(remaining)
+	}
+
+	return formatSpan(-remaining) + " ago"
+}
+
+func formatSpan(d time.Duration) string {
+	d = d.Truncate(time.Minute)
+
+	switch {
+	case d < time.Minute:
+		return "< 1m"
+	case d < time.Hour:
+		return fmt.Sprintf("%dm", int(d.Minutes()))
+	case d < 24*time.Hour:
+		return fmt.Sprintf("%dh %dm", int(d.Hours()), int(d.Minutes())%60)
+	default:
+		return fmt.Sprintf("%dd %dh", int(d.Hours())/24, int(d.Hours())%24)
+	}
 }
 
 func isOffline(connectivity environment.Connectivity) bool {

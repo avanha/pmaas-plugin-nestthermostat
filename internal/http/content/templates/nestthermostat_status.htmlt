@@ -14,25 +14,57 @@
                 {{end}}
             </div>
         </div>
-        <div class="container nowrap">
+        <div class="container nowrap token-summary">
             <div class="label">Refresh Token</div>
             <div class="value">
-                {{if .HasRefreshToken}}
-                    <i class="bi bi-check-circle-fill token-ok"></i> Configured
-                {{else}}
+                {{if eq .RefreshTokenState "none"}}
                     <i class="bi bi-x-circle-fill token-missing"></i> Not Configured
+                {{else if eq .RefreshTokenState "rejected"}}
+                    <i class="bi bi-x-circle-fill token-missing"></i> Rejected by Google
+                {{else if eq .RefreshTokenState "expired"}}
+                    <i class="bi bi-x-circle-fill token-missing"></i> Expired
+                {{else if eq .RefreshTokenState "expiring"}}
+                    <i class="bi bi-exclamation-triangle-fill token-warning"></i> Expiring Soon
+                {{else}}
+                    <i class="bi bi-check-circle-fill token-ok"></i> Configured
                 {{end}}
+            </div>
+            <div>
+                <button class="get-token-button{{if or (eq .RefreshTokenState "none") (eq .RefreshTokenState "rejected") (eq .RefreshTokenState "expired")}} attention{{end}}">Get Token</button>
             </div>
         </div>
         {{if .HasRefreshToken}}
-            <div class="container nowrap">
-                <div class="label">Obtained</div>
-                <div class="timestamp">{{.RefreshTokenObtainedTime.Format "2006-01-02 3:04:05 PM"}}</div>
+            <div class="container token-details">
+                <div class="detail">
+                    <span class="label">Obtained</span>
+                    <span class="timestamp">{{.RefreshTokenObtainedTime.Format "2006-01-02 3:04:05 PM"}}</span>
+                </div>
+                <div class="detail">
+                    <span class="label">Expires</span>
+                    <span class="timestamp expiration {{.RefreshTokenState}}">
+                        {{if .RefreshTokenNoExpiry}}
+                            None reported{{if .RefreshTokenEstimateDisproven}}
+                            <span class="note">(the estimate passed and the token still works)</span>{{end}}
+                        {{else}}
+                            {{.RefreshTokenExpiration.Format "2006-01-02 3:04:05 PM"}}
+                            <span class="remaining">({{FormatRemaining .RefreshTokenExpiration}})</span>
+                            {{if not .RefreshTokenExpirationKnown}}<span class="note estimated">(Estimated)</span>{{end}}
+                        {{end}}
+                    </span>
+                </div>
             </div>
         {{end}}
-        <div class="container nowrap">
-            <div><button class="get-token-button">Get Token</button></div>
-        </div>
+        {{if or (eq .RefreshTokenState "rejected") (eq .RefreshTokenState "expired")}}
+            <div class="container token-notice">
+                <div class="wrap value token-missing reauthorize-message">
+                    {{if or (eq .RefreshTokenState "rejected") .RefreshTokenExpirationKnown}}
+                        The plugin can't reach Google until it's authorized again. Use Get Token.
+                    {{else}}
+                        The estimated expiration has passed. If the plugin has stopped receiving data, use Get Token.
+                    {{end}}
+                </div>
+            </div>
+        {{end}}
     </div>
     <div class="container">
         <div class="group-label">Activity</div>
@@ -63,7 +95,7 @@
         </div>
         {{if not .LastErrorTime.IsZero}}
             <div class="container nowrap">
-                <div class="value monospace">{{.LastErrorMessage}}</div>
+                <div class="wrap value monospace">{{.LastErrorMessage}}</div>
             </div>
         {{end}}
     </div>

@@ -22,6 +22,7 @@ import (
 	"github.com/avanha/pmaas-plugin-nestthermostat/internal/http"
 	poller2 "github.com/avanha/pmaas-plugin-nestthermostat/internal/poller"
 	"github.com/avanha/pmaas-plugin-nestthermostat/internal/pubsub"
+	"github.com/avanha/pmaas-plugin-nestthermostat/internal/refreshtoken"
 	"github.com/avanha/pmaas-plugin-nestthermostat/internal/sdm"
 	spi "github.com/avanha/pmaas-spi"
 	"github.com/avanha/pmaas-spi/environment"
@@ -69,6 +70,18 @@ type plugin struct {
 	oauthClientScope              string
 	oauthRefreshToken             string
 	oauthRefreshTokenObtainedTime time.Time
+
+	// oauthRefreshTokenExpiration is when Google said the refresh token expires, if it said (see
+	// refreshtoken.ExpiresInKey); oauthRefreshTokenExpirationKnown is whether it did. When it didn't, the
+	// status page estimates one (see refreshtoken.Evaluate).
+	oauthRefreshTokenExpiration      time.Time
+	oauthRefreshTokenExpirationKnown bool
+
+	// oauthTokenRejected is whether Google has refused the refresh token (see refreshtoken.IsRejection)
+	// and not been satisfied by it since: it's cleared by the next successful use of the token, or by a
+	// new token. lastTokenUse is when the token last succeeded in fetching something.
+	oauthTokenRejected bool
+	lastTokenUse       time.Time
 
 	// lastPollTime and lastPubSubMessageTime are the last time each data-ingestion path actually
 	// delivered device data — see data.PluginStatus for the same distinction from "was attempted".
@@ -161,6 +174,8 @@ func (p *plugin) Init(container spi.IPMAASContainer) {
 		persistentConfigV1 := persistentConfig.(*config.PersistentConfigV1)
 		p.oauthRefreshToken = persistentConfigV1.RefreshToken
 		p.oauthRefreshTokenObtainedTime = persistentConfigV1.RefreshTokenObtainedTime
+		p.oauthRefreshTokenExpiration = persistentConfigV1.RefreshTokenExpirationTime
+		p.oauthRefreshTokenExpirationKnown = persistentConfigV1.RefreshTokenExpirationKnown
 	}
 }
 
@@ -280,6 +295,7 @@ func (p *plugin) currentRefreshToken() string {
 // whole-record staleness check isn't enough. Runs on the plugin's own mailbox goroutine (see Start).
 func (p *plugin) handleDeviceList(fetchTime time.Time, devices []sdm.DeviceTraits) {
 	p.lastPollTime = fetchTime
+	p.noteTokenUsedSuccessfully(fetchTime)
 
 	for _, device := range devices {
 		existing, known := p.thermostats[device.Id]
@@ -312,6 +328,10 @@ func (p *plugin) handleDeviceList(fetchTime time.Time, devices []sdm.DeviceTrait
 // two are independent: the poller only refreshes user info occasionally (see
 // poller.userInfoRefreshInterval), not on every device poll. Runs on the plugin's own mailbox goroutine.
 func (p *plugin) handleUserInfoUpdate(userInfo sdm.UserInfo) {
+	// The poller only calls this after a successful userinfo fetch, which is as good a use of the
+	// refresh token as any.
+	p.noteTokenUsedSuccessfully(time.Now())
+
 	// Guards against ever clobbering a previously-known-good value with an empty one — shouldn't
 	// actually happen given the poller only calls this on a successful fetch, but costs nothing to be
 	// defensive about here too.
@@ -448,16 +468,31 @@ func (p *plugin) getStatusAndEntities() common.StatusAndEntities {
 
 	sort.Slice(thermostats, func(i, j int) bool { return thermostats[i].Name < thermostats[j].Name })
 
+	token := refreshtoken.Evaluate(refreshtoken.Info{
+		HasToken:             p.oauthRefreshToken != "",
+		Obtained:             p.oauthRefreshTokenObtainedTime,
+		Expiration:           p.oauthRefreshTokenExpiration,
+		ExpirationKnown:      p.oauthRefreshTokenExpirationKnown,
+		EstimatedLifetime:    p.config.RefreshTokenLifetimeEstimate,
+		Rejected:             p.oauthTokenRejected,
+		LastUsedSuccessfully: p.lastTokenUse,
+	}, time.Now())
+
 	return common.StatusAndEntities{
 		Status: data.PluginStatus{
-			GoogleUser:               p.googleUser,
-			GoogleUserPicture:        p.googleUserPicture,
-			HasRefreshToken:          p.oauthRefreshToken != "",
-			RefreshTokenObtainedTime: p.oauthRefreshTokenObtainedTime,
-			LastPollTime:             p.lastPollTime,
-			LastPubSubMessageTime:    p.lastPubSubMessageTime,
-			LastErrorMessage:         p.lastErrorMessage,
-			LastErrorTime:            p.lastErrorTime,
+			GoogleUser:                    p.googleUser,
+			GoogleUserPicture:             p.googleUserPicture,
+			HasRefreshToken:               p.oauthRefreshToken != "",
+			RefreshTokenObtainedTime:      p.oauthRefreshTokenObtainedTime,
+			RefreshTokenState:             token.State.String(),
+			RefreshTokenExpiration:        token.Expiration,
+			RefreshTokenExpirationKnown:   token.ExpirationKnown,
+			RefreshTokenNoExpiry:          token.NoExpiry,
+			RefreshTokenEstimateDisproven: token.EstimateDisproven,
+			LastPollTime:                  p.lastPollTime,
+			LastPubSubMessageTime:         p.lastPubSubMessageTime,
+			LastErrorMessage:              p.lastErrorMessage,
+			LastErrorTime:                 p.lastErrorTime,
 		},
 		Thermostats: thermostats,
 	}
@@ -598,10 +633,15 @@ func (p *plugin) onExchangeCodeForTokenComplete(attempt *oauthAttempt, token *oa
 		return fmt.Errorf("onExchangeCodeForTokenComplete failed, code exchange failed, err=%v", err)
 	}
 
+	now := time.Now()
+
 	p.oauthClientToken = token
 	p.oauthRefreshToken = token.RefreshToken
-	p.oauthRefreshTokenObtainedTime = time.Now()
+	p.oauthRefreshTokenObtainedTime = now
 	p.oauthClientScope = scope
+	p.oauthTokenRejected = false
+	p.lastTokenUse = time.Time{}
+	p.recordRefreshTokenLifetime(token, now)
 
 	p.saveConfig()
 
@@ -623,6 +663,44 @@ func (p *plugin) recordError(err error) {
 	p.lastErrorMessage = err.Error()
 	p.lastErrorTime = time.Now()
 	fmt.Printf("%T Error: %v\n", p, err)
+
+	// A refresh token Google won't honor any more needs the user to authorize again, which is worth
+	// far more than a line in the last-error box: the status page says so (see data.PluginStatus).
+	if refreshtoken.IsRejection(err) && !p.oauthTokenRejected {
+		p.oauthTokenRejected = true
+		fmt.Printf("%T WARNING: Google rejected the refresh token, it has expired or been revoked. "+
+			"Authorize the plugin again using Get Token on its status page.\n", p)
+	}
+}
+
+// recordRefreshTokenLifetime notes when Google says the refresh token just obtained (at now) expires,
+// if it says. Google reports it for apps whose consent screen is in "Testing" status and not otherwise,
+// so when it's absent that's normal, and the status page falls back to an estimate. Either way what was
+// found is logged, since it's the evidence for which kind of app this is.
+func (p *plugin) recordRefreshTokenLifetime(token *oauth2.Token, now time.Time) {
+	lifetime, reported := refreshtoken.LifetimeFromResponse(token.Extra(refreshtoken.ExpiresInKey))
+
+	if !reported {
+		p.oauthRefreshTokenExpiration = time.Time{}
+		p.oauthRefreshTokenExpirationKnown = false
+		fmt.Printf("%T Google did not report a refresh token lifetime (%s absent or unusable), "+
+			"the expiration shown will be an estimate\n", p, refreshtoken.ExpiresInKey)
+
+		return
+	}
+
+	p.oauthRefreshTokenExpiration = now.Add(lifetime)
+	p.oauthRefreshTokenExpirationKnown = true
+	fmt.Printf("%T Google reports the refresh token expires in %v, at %v\n",
+		p, lifetime, p.oauthRefreshTokenExpiration)
+}
+
+// noteTokenUsedSuccessfully records that the refresh token just worked: the poller used it to fetch
+// something. That clears any earlier rejection, and is what lets an estimated expiration be proven
+// wrong (see refreshtoken.Evaluate).
+func (p *plugin) noteTokenUsedSuccessfully(at time.Time) {
+	p.oauthTokenRejected = false
+	p.lastTokenUse = at
 }
 
 // saveConfig builds a snapshot of the current persistent config on the plugin's own mailbox goroutine
@@ -631,12 +709,14 @@ func (p *plugin) recordError(err error) {
 // persisting, an earlier save still queued when a newer one arrives is simply discarded in favor of it.
 func (p *plugin) saveConfig() {
 	persistentConfig := config.PersistentConfigV1{
-		AccessToken:               p.oauthClientToken.AccessToken,
-		AccessTokenType:           p.oauthClientToken.TokenType,
-		AccessTokenExpirationTime: p.oauthClientToken.Expiry,
-		AccessTokenScopes:         []string{p.oauthClientScope},
-		RefreshToken:              p.oauthClientToken.RefreshToken,
-		RefreshTokenObtainedTime:  p.oauthRefreshTokenObtainedTime,
+		AccessToken:                 p.oauthClientToken.AccessToken,
+		AccessTokenType:             p.oauthClientToken.TokenType,
+		AccessTokenExpirationTime:   p.oauthClientToken.Expiry,
+		AccessTokenScopes:           []string{p.oauthClientScope},
+		RefreshToken:                p.oauthClientToken.RefreshToken,
+		RefreshTokenObtainedTime:    p.oauthRefreshTokenObtainedTime,
+		RefreshTokenExpirationTime:  p.oauthRefreshTokenExpiration,
+		RefreshTokenExpirationKnown: p.oauthRefreshTokenExpirationKnown,
 	}
 
 	err := p.saveQueue.Send(func() {

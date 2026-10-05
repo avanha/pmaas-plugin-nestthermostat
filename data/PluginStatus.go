@@ -14,6 +14,22 @@ type PluginStatus struct {
 	HasRefreshToken          bool
 	RefreshTokenObtainedTime time.Time
 
+	// RefreshTokenState is how far the refresh token can be relied on: "none", "valid", "expiring"
+	// (expires within a day), "expired", or "rejected" (Google refused it). "rejected" is a fact,
+	// whereas "expired" may rest on an estimate (see RefreshTokenExpirationKnown).
+	RefreshTokenState string
+
+	// RefreshTokenExpiration is when the refresh token expires. RefreshTokenExpirationKnown says whether
+	// Google reported that time (true) or it's an estimate (false); the status page labels estimates as
+	// such. RefreshTokenNoExpiry is true when there's no expiration to show (Google reported none and the
+	// estimate is disabled, impossible, or was disproven), in which case RefreshTokenExpiration is zero.
+	// RefreshTokenEstimateDisproven is true if the estimated expiration passed and the token kept
+	// working anyway.
+	RefreshTokenExpiration        time.Time
+	RefreshTokenExpirationKnown   bool
+	RefreshTokenNoExpiry          bool
+	RefreshTokenEstimateDisproven bool
+
 	// LastPollTime and LastPubSubMessageTime are the last time each of this plugin's two independent
 	// data-ingestion paths actually delivered device data — not merely "was attempted" (a failed
 	// attempt instead updates LastErrorTime below, without moving these forward).
