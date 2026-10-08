@@ -15,11 +15,13 @@ import (
 	"github.com/avanha/pmaas-plugin-nestthermostat/internal/refreshtoken"
 	"github.com/avanha/pmaas-plugin-nestthermostat/internal/sdm"
 	spi "github.com/avanha/pmaas-spi"
+	"github.com/avanha/pmaas-spi/alert"
 	"golang.org/x/oauth2"
 )
 
 func newTokenTestPlugin() *plugin {
 	return &plugin{
+		container:                     &testContainer{},
 		thermostats:                   make(map[string]*entities.NestThermostat),
 		oauthRefreshToken:             "refresh-token",
 		oauthRefreshTokenObtainedTime: time.Now().Add(-time.Hour),
@@ -160,13 +162,21 @@ func TestRefreshTokenStatus_AnEstimateTheTokenOutlivedIsDisproven(t *testing.T) 
 	}
 }
 
-type savingContainer struct {
+// testContainer implements just what the plugin uses here. Calling anything else panics.
+type testContainer struct {
 	spi.IPMAASContainer
-	mu    sync.Mutex
-	saved []any
+
+	mu           sync.Mutex
+	saved        []any
+	broadcasts   []any
+	broadcastIds []string
+	broadcastErr error
+
+	// mailbox, if set, is the plugin goroutine: enqueued functions run on it, in order.
+	mailbox *mailbox.Mailbox
 }
 
-func (c *savingContainer) SaveConfig(cfg any) error {
+func (c *testContainer) SaveConfig(cfg any) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.saved = append(c.saved, cfg)
@@ -174,8 +184,49 @@ func (c *savingContainer) SaveConfig(cfg any) error {
 	return nil
 }
 
+func (c *testContainer) BroadcastEvent(entityEventId string, event any) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if c.broadcastErr != nil {
+		return c.broadcastErr
+	}
+
+	c.broadcastIds = append(c.broadcastIds, entityEventId)
+	c.broadcasts = append(c.broadcasts, event)
+
+	return nil
+}
+
+func (c *testContainer) EnqueueOnPluginGoRoutine(f func()) error {
+	if c.mailbox != nil {
+		return c.mailbox.Send(f)
+	}
+
+	go f()
+
+	return nil
+}
+
+// alertEvents returns the alert events broadcast so far.
+func (c *testContainer) alertEvents() []any {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	var result []any
+
+	for _, event := range c.broadcasts {
+		switch event.(type) {
+		case alert.RaisedEvent, alert.ClearedEvent:
+			result = append(result, event)
+		}
+	}
+
+	return result
+}
+
 func TestOnExchangeCodeForTokenComplete_RecordsAndPersistsTheLifetimeAndClearsRejection(t *testing.T) {
-	container := &savingContainer{}
+	container := &testContainer{}
 	p := newTokenTestPlugin()
 	p.container = container
 	p.saveQueue = mailbox.NewConflatingMailbox()

@@ -25,6 +25,7 @@ import (
 	"github.com/avanha/pmaas-plugin-nestthermostat/internal/refreshtoken"
 	"github.com/avanha/pmaas-plugin-nestthermostat/internal/sdm"
 	spi "github.com/avanha/pmaas-spi"
+	"github.com/avanha/pmaas-spi/alert"
 	"github.com/avanha/pmaas-spi/environment"
 	"github.com/avanha/pmaas-spi/events"
 	"golang.org/x/oauth2"
@@ -37,6 +38,13 @@ import (
 func NewPluginConfig() config.PluginConfig {
 	return config.PluginConfig{}
 }
+
+const (
+	// alertSource and alertKeyRefreshToken identify the alert raised about the refresh token: the plugin
+	// has at most one at a time, whose severity and wording follow the token's state.
+	alertSource          = "nestthermostat"
+	alertKeyRefreshToken = "refresh-token"
+)
 
 // saveQueueStopTimeout bounds how long Stop waits for a pending persistent-config save to finish
 // writing to disk before giving up on waiting for it.
@@ -82,6 +90,14 @@ type plugin struct {
 	// new token. lastTokenUse is when the token last succeeded in fetching something.
 	oauthTokenRejected bool
 	lastTokenUse       time.Time
+
+	// tokenAlert is the alert last raised about the refresh token, if tokenAlertRaised, so that one that
+	// hasn't changed isn't raised again every time the token is looked at, and so that a clear is only sent
+	// for an alert that was raised. tokenAlertInterval is how often the token is re-evaluated; zero means
+	// refreshtoken.RecheckInterval.
+	tokenAlert         refreshtoken.Alert
+	tokenAlertRaised   bool
+	tokenAlertInterval time.Duration
 
 	// lastPollTime and lastPubSubMessageTime are the last time each data-ingestion path actually
 	// delivered device data — see data.PluginStatus for the same distinction from "was attempted".
@@ -239,6 +255,11 @@ func (p *plugin) Start() {
 			}
 		})
 	p.workersWg.Go(func() { subscriber.Run(ctx) })
+
+	// The token may have expired while the plugin wasn't running, and nothing will say so until a poll
+	// fails, so check it now, and then regularly: the expiration drawing nearer is silent too.
+	p.reportRefreshTokenAlert(true)
+	p.workersWg.Go(func() { p.runRefreshTokenAlertCheck(ctx) })
 }
 
 // registerPreconfiguredThermostats registers an entity for each device id in p.config.ThermostatIds
@@ -468,15 +489,7 @@ func (p *plugin) getStatusAndEntities() common.StatusAndEntities {
 
 	sort.Slice(thermostats, func(i, j int) bool { return thermostats[i].Name < thermostats[j].Name })
 
-	token := refreshtoken.Evaluate(refreshtoken.Info{
-		HasToken:             p.oauthRefreshToken != "",
-		Obtained:             p.oauthRefreshTokenObtainedTime,
-		Expiration:           p.oauthRefreshTokenExpiration,
-		ExpirationKnown:      p.oauthRefreshTokenExpirationKnown,
-		EstimatedLifetime:    p.config.RefreshTokenLifetimeEstimate,
-		Rejected:             p.oauthTokenRejected,
-		LastUsedSuccessfully: p.lastTokenUse,
-	}, time.Now())
+	token := p.refreshTokenStatus(time.Now())
 
 	return common.StatusAndEntities{
 		Status: data.PluginStatus{
@@ -495,6 +508,86 @@ func (p *plugin) getStatusAndEntities() common.StatusAndEntities {
 			LastErrorTime:                 p.lastErrorTime,
 		},
 		Thermostats: thermostats,
+	}
+}
+
+// refreshTokenStatus interprets what's known about the refresh token as of now. Runs on the plugin's own
+// goroutine.
+func (p *plugin) refreshTokenStatus(now time.Time) refreshtoken.Status {
+	return refreshtoken.Evaluate(refreshtoken.Info{
+		HasToken:             p.oauthRefreshToken != "",
+		Obtained:             p.oauthRefreshTokenObtainedTime,
+		Expiration:           p.oauthRefreshTokenExpiration,
+		ExpirationKnown:      p.oauthRefreshTokenExpirationKnown,
+		EstimatedLifetime:    p.config.RefreshTokenLifetimeEstimate,
+		Rejected:             p.oauthTokenRejected,
+		LastUsedSuccessfully: p.lastTokenUse,
+	}, now)
+}
+
+// reportRefreshTokenAlert tells the alert console how the refresh token is doing (see refreshtoken.AlertFor),
+// raising or clearing its alert to match. It's called whenever something that affects the token happens, and
+// on a timer for the one thing that does so silently, the expiration drawing nearer.
+//
+// Raising an alert again just updates it, so the periodic check passes force to refresh the message's
+// countdown. Without force, an alert is only raised when it's new or has changed in a way the user would
+// notice (see refreshtoken.Alert.Same), since this is also called after every successful poll. Runs on
+// the plugin's own goroutine.
+func (p *plugin) reportRefreshTokenAlert(force bool) {
+	now := time.Now()
+	desired := refreshtoken.AlertFor(p.refreshTokenStatus(now), now)
+
+	if !desired.Active {
+		if p.tokenAlertRaised {
+			if err := alert.Clear(p.container, alertSource, alertKeyRefreshToken); err != nil {
+				// Still raised as far as the console is concerned, so the next look tries again.
+				fmt.Printf("%T Unable to clear the refresh token alert: %v\n", p, err)
+				return
+			}
+
+			p.tokenAlertRaised = false
+			p.tokenAlert = refreshtoken.Alert{}
+		}
+
+		return
+	}
+
+	if !force && p.tokenAlertRaised && p.tokenAlert.Same(desired) {
+		return
+	}
+
+	err := alert.Raise(p.container, alertSource, alertKeyRefreshToken, desired.Severity, desired.Title, desired.Message)
+	if err != nil {
+		// Don't remember an alert that wasn't raised, so that the next look tries again.
+		fmt.Printf("%T Unable to raise the refresh token alert: %v\n", p, err)
+		return
+	}
+
+	p.tokenAlert = desired
+	p.tokenAlertRaised = true
+}
+
+// runRefreshTokenAlertCheck re-evaluates the refresh token's alert every interval until ctx is done. The
+// evaluation itself happens on the plugin's goroutine, where the token's state lives.
+func (p *plugin) runRefreshTokenAlertCheck(ctx context.Context) {
+	interval := p.tokenAlertInterval
+
+	if interval <= 0 {
+		interval = refreshtoken.RecheckInterval
+	}
+
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if err := p.container.EnqueueOnPluginGoRoutine(func() { p.reportRefreshTokenAlert(true) }); err != nil {
+				fmt.Printf("%T Failed to enqueue the refresh token alert check: %v\n", p, err)
+			}
+		}
 	}
 }
 
@@ -642,6 +735,7 @@ func (p *plugin) onExchangeCodeForTokenComplete(attempt *oauthAttempt, token *oa
 	p.oauthTokenRejected = false
 	p.lastTokenUse = time.Time{}
 	p.recordRefreshTokenLifetime(token, now)
+	p.reportRefreshTokenAlert(false)
 
 	p.saveConfig()
 
@@ -670,6 +764,7 @@ func (p *plugin) recordError(err error) {
 		p.oauthTokenRejected = true
 		fmt.Printf("%T WARNING: Google rejected the refresh token, it has expired or been revoked. "+
 			"Authorize the plugin again using Get Token on its status page.\n", p)
+		p.reportRefreshTokenAlert(false)
 	}
 }
 
@@ -701,6 +796,9 @@ func (p *plugin) recordRefreshTokenLifetime(token *oauth2.Token, now time.Time) 
 func (p *plugin) noteTokenUsedSuccessfully(at time.Time) {
 	p.oauthTokenRejected = false
 	p.lastTokenUse = at
+
+	// A token that works clears a rejection, and disproves an estimate that said it had expired.
+	p.reportRefreshTokenAlert(false)
 }
 
 // saveConfig builds a snapshot of the current persistent config on the plugin's own mailbox goroutine
