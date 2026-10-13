@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -297,7 +298,19 @@ func (c *Client) FetchUserInfo(ctx context.Context) (UserInfo, error) {
 		return UserInfo{}, fmt.Errorf("failed to fetch userinfo: %w", err)
 	}
 
-	return UserInfo{Email: userinfo.Email, Picture: userinfo.Picture}, nil
+	return UserInfo{Email: userinfo.Email, Picture: safePictureURL(userinfo.Picture)}, nil
+}
+
+// safePictureURL returns the URL if it is an absolute https URL, and "" otherwise. The picture is shown as an
+// image source on the status page; Google sends https URLs, and anything else (a javascript: or data: URL,
+// say) is dropped rather than rendered, whatever the reason it arrived.
+func safePictureURL(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil || u.Scheme != "https" || u.Host == "" {
+		return ""
+	}
+
+	return raw
 }
 
 // DeviceTraits pairs a device id with its parsed traits. FetchDevices hands these back raw (rather than

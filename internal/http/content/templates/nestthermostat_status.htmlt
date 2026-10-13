@@ -8,9 +8,9 @@
                     Not Logged In
                 {{else}}
                     {{if ne .GoogleUserPicture ""}}
-                        <img class="profile-pic" src="{{.GoogleUserPicture}}" referrerpolicy="no-referrer" alt="">
+                        <img class="profile-pic" src="{{.GoogleUserPicture | html}}" referrerpolicy="no-referrer" alt="">
                     {{end}}
-                    {{.GoogleUser}}
+                    {{.GoogleUser | html}}
                 {{end}}
             </div>
         </div>
@@ -41,7 +41,7 @@
                 </div>
                 <div class="detail">
                     <span class="label">Expires</span>
-                    <span class="timestamp expiration {{.RefreshTokenState}}">
+                    <span class="timestamp expiration {{.RefreshTokenState | html}}">
                         {{if .RefreshTokenNoExpiry}}
                             None reported{{if .RefreshTokenEstimateDisproven}}
                             <span class="note">(the estimate passed and the token still works)</span>{{end}}
@@ -95,7 +95,7 @@
         </div>
         {{if not .LastErrorTime.IsZero}}
             <div class="container nowrap">
-                <div class="wrap value monospace">{{.LastErrorMessage}}</div>
+                <div class="wrap value monospace">{{.LastErrorMessage | html}}</div>
             </div>
         {{end}}
     </div>

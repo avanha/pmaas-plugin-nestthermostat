@@ -2,10 +2,10 @@ package http
 
 import (
 	"bytes"
-	"html/template"
 	"path"
 	"strings"
 	"testing"
+	"text/template"
 	"time"
 
 	"github.com/avanha/pmaas-plugin-nestthermostat/data"
@@ -180,5 +180,27 @@ func TestStatusTemplate_RefreshTokenStates(t *testing.T) {
 				t.Errorf("%s: output unexpectedly contains %q", c.name, unwanted)
 			}
 		}
+	}
+}
+
+// The core renders with text/template, which does no escaping, so anything the template interpolates has to
+// be escaped by the template itself.
+func TestStatusTemplate_EscapesHostileText(t *testing.T) {
+	const hostile = `<script>alert(1)</script>`
+
+	status := data.PluginStatus{
+		LastErrorTime:    time.Now(),
+		LastErrorMessage: "oauth failed: " + hostile,
+		GoogleUser:       hostile,
+	}
+
+	output := renderStatus(t, status)
+
+	if strings.Contains(output, hostile) {
+		t.Fatalf("unescaped text reached the page:\n%s", output)
+	}
+
+	if !strings.Contains(output, "&lt;script&gt;alert(1)&lt;/script&gt;") {
+		t.Fatalf("expected the escaped text on the page:\n%s", output)
 	}
 }
