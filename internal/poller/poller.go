@@ -3,6 +3,7 @@ package poller
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/avanha/pmaas-plugin-nestthermostat/internal/sdm"
@@ -25,12 +26,14 @@ const userInfoRefreshInterval = 4 * time.Hour
 // flow (they explicitly pick which devices to share with this OAuth client), so filtering again locally
 // would just be a second, easily-stale copy of that same decision.
 func NewPoller(
+	log *slog.Logger,
 	sdmClientOptions sdm.ClientOptions,
 	refreshTokenFn func() string,
 	deviceListHandlerFn func(fetchTime time.Time, devices []sdm.DeviceTraits),
 	userInfoHandlerFn func(userInfo sdm.UserInfo),
 	errorHandlerFn func(err error)) *Poller {
 	return &Poller{
+		log:                 log,
 		initialDelaySeconds: 30,
 		intervalMinutes:     60,
 		sdmClientOptions:    sdmClientOptions,
@@ -43,6 +46,7 @@ func NewPoller(
 }
 
 type Poller struct {
+	log                 *slog.Logger
 	sdmClientOptions    sdm.ClientOptions
 	refreshTokenFn      func() string
 	initialDelaySeconds int
@@ -78,7 +82,7 @@ func (p *Poller) Run(ctx context.Context) {
 	run := p.waitForTimer(ctx, time.NewTimer(time.Duration(p.initialDelaySeconds)*time.Second))
 
 	if !run {
-		fmt.Print("Nest poller terminated\n")
+		p.log.Debug("terminated")
 		return
 	}
 
@@ -90,7 +94,7 @@ func (p *Poller) Run(ctx context.Context) {
 		run = p.waitForTick(ctx, ticker)
 	}
 
-	fmt.Print("Nest poller terminated\n")
+	p.log.Debug("terminated")
 }
 
 // ensureClient lazily (re)creates the SDM client once a refresh token is available. It's re-checked on
@@ -104,7 +108,7 @@ func (p *Poller) ensureClient(ctx context.Context) bool {
 	refreshToken := p.refreshTokenFn()
 
 	if refreshToken == "" {
-		fmt.Print("Nest poller: no refresh token available yet, skipping poll\n")
+		p.log.Debug("no refresh token available yet, skipping poll")
 		return false
 	}
 

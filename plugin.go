@@ -5,6 +5,8 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"github.com/avanha/pmaas-spi/logging"
+	"log/slog"
 	"net/url"
 	"reflect"
 	"sort"
@@ -57,6 +59,7 @@ const saveQueueStopTimeout = 5 * time.Second
 var IThermostatType = reflect.TypeOf((*environment.IThermostat)(nil)).Elem()
 
 type plugin struct {
+	log         *slog.Logger
 	container   spi.IPMAASContainer
 	config      config.PluginConfig
 	httpHandler *http.Handler
@@ -150,6 +153,7 @@ func (p *plugin) ShortName() string {
 
 func (p *plugin) Init(container spi.IPMAASContainer) {
 	p.container = container
+	p.log = logging.For(container)
 	p.saveQueue = mailbox.NewConflatingMailbox()
 
 	// The userinfo.email/userinfo.profile scopes are what let FetchUserInfo (see internal/sdm.Client)
@@ -202,33 +206,35 @@ func (p *plugin) Start() {
 	p.cancelWorkers = cancelFn
 
 	poller := poller2.NewPoller(
+		logging.For(p.container, "poller"),
 		sdm.ClientOptions{
 			// Reuse the ClientID/ClientSecret already parsed from OAuthClientConfig in Init, rather
 			// than a separate config field, so there's only one place these credentials can come from.
 			ClientId:     p.oauthClientConfig.ClientID,
 			ClientSecret: p.oauthClientConfig.ClientSecret,
 			SdmProjectID: p.config.SdmProjectId,
+			Logger:       logging.For(p.container, "sdm"),
 		},
 		p.currentRefreshToken,
 		func(fetchTime time.Time, devices []sdm.DeviceTraits) {
 			err := p.container.EnqueueOnPluginGoRoutine(func() { p.handleDeviceList(fetchTime, devices) })
 
 			if err != nil {
-				fmt.Printf("%T Failed to enqueue device list update: %v\n", p, err)
+				p.log.Error("failed to enqueue device list update", "error", err)
 			}
 		},
 		func(userInfo sdm.UserInfo) {
 			err := p.container.EnqueueOnPluginGoRoutine(func() { p.handleUserInfoUpdate(userInfo) })
 
 			if err != nil {
-				fmt.Printf("%T Failed to enqueue user info update: %v\n", p, err)
+				p.log.Error("failed to enqueue user info update", "error", err)
 			}
 		},
 		func(pollErr error) {
 			err := p.container.EnqueueOnPluginGoRoutine(func() { p.recordError(pollErr) })
 
 			if err != nil {
-				fmt.Printf("%T Failed to enqueue poll error (%v): %v\n", p, pollErr, err)
+				p.log.Error("failed to enqueue poll error", "pollError", pollErr, "error", err)
 			}
 		})
 	p.poller = poller
@@ -239,19 +245,20 @@ func (p *plugin) Start() {
 			ProjectId:           p.config.GcpProjectId,
 			SubscriptionId:      p.config.PubSubSubscriptionId,
 			ServiceAccountCreds: p.config.ServiceAccountCreds,
+			Logger:              logging.For(p.container, "pubsub"),
 		},
 		func(deviceId string, timestamp time.Time, traits googleapi.RawMessage) {
 			err := p.container.EnqueueOnPluginGoRoutine(func() { p.handleDeviceUpdate(deviceId, timestamp, traits) })
 
 			if err != nil {
-				fmt.Printf("%T Failed to enqueue device update: %v\n", p, err)
+				p.log.Error("failed to enqueue device update", "error", err)
 			}
 		},
 		func(pubsubErr error) {
 			err := p.container.EnqueueOnPluginGoRoutine(func() { p.recordError(pubsubErr) })
 
 			if err != nil {
-				fmt.Printf("%T Failed to enqueue pubsub error (%v): %v\n", p, pubsubErr, err)
+				p.log.Error("failed to enqueue pubsub error", "pubsubError", pubsubErr, "error", err)
 			}
 		})
 	p.workersWg.Go(func() { subscriber.Run(ctx) })
@@ -302,7 +309,7 @@ func (p *plugin) currentRefreshToken() string {
 		"unable to read current refresh token")
 
 	if err != nil {
-		fmt.Printf("%T Failed to read current refresh token: %v\n", p, err)
+		p.log.Error("failed to read current refresh token", "error", err)
 	}
 
 	return token
@@ -379,14 +386,14 @@ func (p *plugin) registerNewThermostat(t *entities.NestThermostat) {
 		func() (any, error) { return t.GetStub(p.container), nil })
 
 	if err != nil {
-		fmt.Printf("%T Failed to register entity for thermostat %s: %v\n", p, t.Id, err)
+		p.log.Error("failed to register entity for thermostat", "id", t.Id, "error", err)
 		return
 	}
 
 	t.PmaasEntityId = pmaasEntityId
 	p.thermostats[t.Id] = t
 
-	fmt.Printf("%T Registered thermostat %s (%s) as entity %s\n", p, t.Id, t.Name.Value, pmaasEntityId)
+	p.log.Debug("registered thermostat as entity", "id", t.Id, "value", t.Name.Value, "pmaasEntityId", pmaasEntityId)
 }
 
 func (p *plugin) broadcastThermostatStateChanged(t *entities.NestThermostat) {
@@ -400,7 +407,7 @@ func (p *plugin) broadcastThermostatStateChanged(t *entities.NestThermostat) {
 	}
 
 	if err := p.container.BroadcastEvent(t.PmaasEntityId, event); err != nil {
-		fmt.Printf("%T Failed to broadcast state change for %s: %v\n", p, t.Id, err)
+		p.log.Error("failed to broadcast state change", "id", t.Id, "error", err)
 	}
 }
 
@@ -414,7 +421,7 @@ func (p *plugin) handleDeviceUpdate(deviceId string, timestamp time.Time, traits
 	existing, known := p.thermostats[deviceId]
 
 	if !known {
-		fmt.Printf("%T Discarding update for unknown thermostat %s\n", p, deviceId)
+		p.log.Warn("discarding update for unknown thermostat", "deviceId", deviceId)
 		return
 	}
 
@@ -431,7 +438,7 @@ func (p *plugin) handleDeviceUpdate(deviceId string, timestamp time.Time, traits
 }
 
 func (p *plugin) Stop() chan func() {
-	fmt.Printf("%T Stopping...\n", p)
+	p.log.Info("stopping")
 
 	if p.oauthAttempt != nil && p.oauthAttempt.cancel() {
 		p.oauthAttempt = nil
@@ -441,15 +448,15 @@ func (p *plugin) Stop() chan func() {
 
 	callbackCh := make(chan func())
 	go func() {
-		fmt.Printf("%T Waiting for workers to finish...\n", p)
+		p.log.Debug("waiting for workers to finish")
 		p.workersWg.Wait()
 
-		fmt.Printf("%T Waiting for pending config save to complete...\n", p)
+		p.log.Debug("waiting for pending config save to complete")
 		saveCtx, cancelSaveCtx := context.WithTimeout(context.Background(), saveQueueStopTimeout)
 		defer cancelSaveCtx()
 
 		if err := p.saveQueue.Stop(saveCtx); err != nil {
-			fmt.Printf("%T Timed out waiting for pending config save: %v\n", p, err)
+			p.log.Debug("timed out waiting for pending config save", "error", err)
 		}
 
 		callbackCh <- func() { p.onWorkersStopped(callbackCh) }
@@ -459,7 +466,7 @@ func (p *plugin) Stop() chan func() {
 }
 
 func (p *plugin) onWorkersStopped(callbackCh chan func()) {
-	fmt.Printf("%T Workers stopped, deregistering entities...\n", p)
+	p.log.Debug("workers stopped, deregistering entities")
 	p.deregisterEntities()
 	close(callbackCh)
 }
@@ -471,7 +478,7 @@ func (p *plugin) deregisterEntities() {
 		}
 
 		if err := p.container.DeregisterEntity(t.PmaasEntityId); err != nil {
-			fmt.Printf("%T Failed to deregister thermostat %s: %v\n", p, id, err)
+			p.log.Error("failed to deregister thermostat", "id", id, "error", err)
 			continue
 		}
 
@@ -541,7 +548,7 @@ func (p *plugin) reportRefreshTokenAlert(force bool) {
 		if p.tokenAlertRaised {
 			if err := alert.Clear(p.container, alertSource, alertKeyRefreshToken); err != nil {
 				// Still raised as far as the console is concerned, so the next look tries again.
-				fmt.Printf("%T Unable to clear the refresh token alert: %v\n", p, err)
+				p.log.Error("unable to clear the refresh token alert", "error", err)
 				return
 			}
 
@@ -559,7 +566,7 @@ func (p *plugin) reportRefreshTokenAlert(force bool) {
 	err := alert.Raise(p.container, alertSource, alertKeyRefreshToken, desired.Severity, desired.Title, desired.Message)
 	if err != nil {
 		// Don't remember an alert that wasn't raised, so that the next look tries again.
-		fmt.Printf("%T Unable to raise the refresh token alert: %v\n", p, err)
+		p.log.Error("unable to raise the refresh token alert", "error", err)
 		return
 	}
 
@@ -585,7 +592,7 @@ func (p *plugin) runRefreshTokenAlertCheck(ctx context.Context) {
 			return
 		case <-ticker.C:
 			if err := p.container.EnqueueOnPluginGoRoutine(func() { p.reportRefreshTokenAlert(true) }); err != nil {
-				fmt.Printf("%T Failed to enqueue the refresh token alert check: %v\n", p, err)
+				p.log.Error("failed to enqueue the refresh token alert check", "error", err)
 			}
 		}
 	}
@@ -593,7 +600,7 @@ func (p *plugin) runRefreshTokenAlertCheck(ctx context.Context) {
 
 func (p *plugin) prepareOAuthAttempt(baseUrl string) common.OAuthAttemptOrError {
 	if p.oauthAttempt != nil {
-		fmt.Printf("Oauth attempt already in progress, cancelling and recreating")
+		p.log.Debug("oauth attempt already in progress, cancelling and recreating")
 		p.oauthAttempt.cancel()
 		p.oauthAttempt = nil
 	}
@@ -669,7 +676,7 @@ func (p *plugin) exchangeCodeForToken(url *url.URL) <-chan error {
 		defer close(resultCh)
 
 		if attempt.ctx.Err() != nil {
-			fmt.Printf("%T Aborting auth code exchange, attempt already canceled\n", p)
+			p.log.Debug("aborting auth code exchange, attempt already canceled")
 			resultCh <- fmt.Errorf("oauth attempt context already canceled")
 			return
 		}
@@ -679,7 +686,7 @@ func (p *plugin) exchangeCodeForToken(url *url.URL) <-chan error {
 		// we can't actually enqueue the callback, or it never runs, we want to at least cancel the attempt.
 		defer attempt.cancel()
 
-		fmt.Printf("Redirect for exchange is: %s\n", oauthClientConfig.RedirectURL)
+		p.log.Debug("redirect URL for exchange", "redirectURL", oauthClientConfig.RedirectURL)
 
 		token, err := oauthClientConfig.Exchange(
 			attempt.ctx,
@@ -694,7 +701,7 @@ func (p *plugin) exchangeCodeForToken(url *url.URL) <-chan error {
 			"Failed to enqueue onExchangeCodeForTokenComplete callback")
 
 		if enqueueError != nil {
-			fmt.Printf("%T Failed to enqueue onExchangeCodeForTokenComplete callback: %v\n", p, enqueueError)
+			p.log.Error("failed to enqueue the oauth code exchange completion", "error", enqueueError)
 			resultCh <- fmt.Errorf("failed to enqueue onExchangeCodeForTokenComplete callback: %v", enqueueError)
 		}
 
@@ -708,13 +715,13 @@ func (p *plugin) exchangeCodeForToken(url *url.URL) <-chan error {
 
 func (p *plugin) onExchangeCodeForTokenComplete(attempt *oauthAttempt, token *oauth2.Token,
 	scope string, err error) error {
-	fmt.Printf("%T onExchangeCodeForTokenComplete, err=%v\n", p, err)
+	p.log.Debug("oauth code exchange complete", "error", err)
 
 	// Cancel the specific attempt no matter what since it's completing
 	attempt.cancel()
 
 	if attempt != p.oauthAttempt {
-		fmt.Printf("%T Ignoring stale oauth completion, attempt no longer current\n", p)
+		p.log.Warn("ignoring stale oauth completion, attempt no longer current")
 		return fmt.Errorf("onExchangeCodeForTokenComplete failed, attempt no longer current")
 	}
 
@@ -756,14 +763,13 @@ func (p *plugin) onExchangeCodeForTokenComplete(attempt *oauthAttempt, token *oa
 func (p *plugin) recordError(err error) {
 	p.lastErrorMessage = err.Error()
 	p.lastErrorTime = time.Now()
-	fmt.Printf("%T Error: %v\n", p, err)
+	p.log.Error("worker error", "error", err)
 
 	// A refresh token Google won't honor any more needs the user to authorize again, which is worth
 	// far more than a line in the last-error box: the status page says so (see data.PluginStatus).
 	if refreshtoken.IsRejection(err) && !p.oauthTokenRejected {
 		p.oauthTokenRejected = true
-		fmt.Printf("%T WARNING: Google rejected the refresh token, it has expired or been revoked. "+
-			"Authorize the plugin again using Get Token on its status page.\n", p)
+		p.log.Warn("Google rejected the refresh token, it has expired or been revoked. Authorize the plugin again using Get Token on its status page.")
 		p.reportRefreshTokenAlert(false)
 	}
 }
@@ -778,16 +784,14 @@ func (p *plugin) recordRefreshTokenLifetime(token *oauth2.Token, now time.Time) 
 	if !reported {
 		p.oauthRefreshTokenExpiration = time.Time{}
 		p.oauthRefreshTokenExpirationKnown = false
-		fmt.Printf("%T Google did not report a refresh token lifetime (%s absent or unusable), "+
-			"the expiration shown will be an estimate\n", p, refreshtoken.ExpiresInKey)
+		p.log.Debug("google did not report a refresh token lifetime, the expiration shown will be an estimate", "expiresInKey", refreshtoken.ExpiresInKey)
 
 		return
 	}
 
 	p.oauthRefreshTokenExpiration = now.Add(lifetime)
 	p.oauthRefreshTokenExpirationKnown = true
-	fmt.Printf("%T Google reports the refresh token expires in %v, at %v\n",
-		p, lifetime, p.oauthRefreshTokenExpiration)
+	p.log.Debug("google reports the refresh token expires", "lifetime", lifetime, "oauthRefreshTokenExpiration", p.oauthRefreshTokenExpiration)
 }
 
 // noteTokenUsedSuccessfully records that the refresh token just worked: the poller used it to fetch
@@ -819,12 +823,12 @@ func (p *plugin) saveConfig() {
 
 	err := p.saveQueue.Send(func() {
 		if err := p.container.SaveConfig(persistentConfig); err != nil {
-			fmt.Printf("%T Failed to save persistent config: %v\n", p, err)
+			p.log.Error("failed to save persistent config", "error", err)
 		}
 	})
 
 	if err != nil {
-		fmt.Printf("%T Failed to enqueue persistent config save: %v\n", p, err)
+		p.log.Error("failed to enqueue persistent config save", "error", err)
 	}
 }
 

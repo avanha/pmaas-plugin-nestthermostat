@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"time"
 
 	pubsub "cloud.google.com/go/pubsub/v2"
@@ -15,6 +16,7 @@ type SubscriberOptions struct {
 	ProjectId           string
 	SubscriptionId      string
 	ServiceAccountCreds []byte
+	Logger              *slog.Logger
 }
 
 type MessagePayload struct {
@@ -42,6 +44,10 @@ type Subscriber struct {
 
 func NewSubscriber(
 	options SubscriberOptions, deviceUpdateHandler Callback, errorHandlerFn func(err error)) *Subscriber {
+	if options.Logger == nil {
+		options.Logger = slog.New(slog.DiscardHandler)
+	}
+
 	return &Subscriber{
 		options:             options,
 		deviceUpdateHandler: deviceUpdateHandler,
@@ -76,7 +82,7 @@ func (s *Subscriber) Run(ctx context.Context) {
 		s.errorHandlerFn(fmt.Errorf("pubsub: receive error: %w", err))
 	}
 
-	fmt.Printf("PubSub subscriber stopped\n")
+	s.options.Logger.Info("pubSub subscriber stopped")
 }
 
 func (s *Subscriber) onMessageReceived(ctx context.Context, msg *pubsub.Message) {

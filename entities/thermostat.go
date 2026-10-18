@@ -1,6 +1,7 @@
 package entities
 
 import (
+	"github.com/avanha/pmaas-spi/logging"
 	"reflect"
 	"time"
 
@@ -225,6 +226,7 @@ func NestThermostatDataToInsertArgs(anyData *any) ([]any, error) {
 func (t *NestThermostat) GetStub(container spi.IPMAASContainer) environment.IThermostat {
 	if t.stub == nil {
 		t.stub = newThermostatStub(
+			logging.For(container, "stub"),
 			t.Id,
 			&spicommon.ThreadSafeEntityWrapper[environment.IThermostat]{
 				Container: container,

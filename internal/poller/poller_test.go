@@ -2,6 +2,7 @@ package poller
 
 import (
 	"context"
+	"log/slog"
 	"testing"
 	"time"
 
@@ -10,6 +11,7 @@ import (
 
 func TestPoller_TriggerPoll_WakesWaitForTimer(t *testing.T) {
 	p := &Poller{
+		log:                   slog.New(slog.DiscardHandler),
 		triggerCh:             make(chan struct{}, 1),
 		sdmClient:             &sdm.Client{},
 		lastUserInfoFetchTime: time.Now(),
@@ -43,6 +45,7 @@ func TestPoller_TriggerPoll_WakesWaitForTimer(t *testing.T) {
 
 func TestPoller_TriggerPoll_WakesWaitForTick(t *testing.T) {
 	p := &Poller{
+		log:                   slog.New(slog.DiscardHandler),
 		intervalMinutes:       60,
 		triggerCh:             make(chan struct{}, 1),
 		sdmClient:             &sdm.Client{},
@@ -79,7 +82,7 @@ func TestPoller_TriggerPoll_WakesWaitForTick(t *testing.T) {
 // trigger is already pending" contract, rather than blocking or panicking when called twice before the
 // first is consumed.
 func TestPoller_TriggerPoll_DoesNotBlockWhenAlreadyPending(t *testing.T) {
-	p := &Poller{triggerCh: make(chan struct{}, 1)}
+	p := &Poller{log: slog.New(slog.DiscardHandler), triggerCh: make(chan struct{}, 1)}
 
 	done := make(chan struct{})
 	go func() {
@@ -97,6 +100,7 @@ func TestPoller_TriggerPoll_DoesNotBlockWhenAlreadyPending(t *testing.T) {
 
 func TestPoller_Run_TerminatesOnContextCancellation(t *testing.T) {
 	p := &Poller{
+		log:                 slog.New(slog.DiscardHandler),
 		initialDelaySeconds: 0,
 		intervalMinutes:     60,
 		triggerCh:           make(chan struct{}, 1),

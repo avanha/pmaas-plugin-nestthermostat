@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/url"
 	"sync"
 	"testing"
@@ -21,6 +22,7 @@ import (
 
 func newTokenTestPlugin() *plugin {
 	return &plugin{
+		log:                           slog.New(slog.DiscardHandler),
 		container:                     &testContainer{},
 		thermostats:                   make(map[string]*entities.NestThermostat),
 		oauthRefreshToken:             "refresh-token",

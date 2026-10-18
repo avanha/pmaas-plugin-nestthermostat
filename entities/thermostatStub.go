@@ -2,6 +2,7 @@ package entities
 
 import (
 	"fmt"
+	"log/slog"
 	"sync/atomic"
 
 	spicommon "github.com/avanha/pmaas-spi/common"
@@ -16,14 +17,15 @@ var _ environment.IThermostat = (*thermostatStub)(nil)
 // state lives, so a consumer (e.g. the environment plugin, seeding a newly discovered thermostat with its
 // current state) can read it from any goroutine.
 type thermostatStub struct {
+	log                    *slog.Logger
 	id                     string
 	closeFn                func() error
 	entityWrapperReference atomic.Pointer[spicommon.ThreadSafeEntityWrapper[environment.IThermostat]]
 }
 
 func newThermostatStub(
-	id string, entityWrapper *spicommon.ThreadSafeEntityWrapper[environment.IThermostat]) *thermostatStub {
-	instance := &thermostatStub{id: id}
+	log *slog.Logger, id string, entityWrapper *spicommon.ThreadSafeEntityWrapper[environment.IThermostat]) *thermostatStub {
+	instance := &thermostatStub{log: log, id: id}
 	instance.entityWrapperReference.Store(entityWrapper)
 
 	instance.closeFn = func() error {
@@ -46,7 +48,7 @@ func (s *thermostatStub) close() {
 	}
 
 	if err := closeFn(); err != nil {
-		fmt.Printf("Failed to close thermostat stub %s: %v\n", s.id, err)
+		s.log.Error("failed to close thermostat stub", "id", s.id, "error", err)
 	}
 }
 

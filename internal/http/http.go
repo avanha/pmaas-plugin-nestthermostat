@@ -4,8 +4,10 @@ import (
 	"embed"
 	"errors"
 	"fmt"
+	"github.com/avanha/pmaas-spi/logging"
 	"html/template"
 	"io"
+	"log/slog"
 	"net/http"
 	"reflect"
 	"time"
@@ -44,6 +46,7 @@ var thermostatTemplate = spi.TemplateInfo{
 }
 
 type Handler struct {
+	log         *slog.Logger
 	container   spi.IPMAASContainer
 	entityStore common.EntityStore
 }
@@ -54,6 +57,7 @@ func NewHandler() *Handler {
 
 func (h *Handler) Init(container spi.IPMAASContainer, entityStore common.EntityStore) {
 	h.container = container
+	h.log = logging.For(container, "http")
 	h.entityStore = entityStore
 	container.ProvideContentFS(&contentFS, "content")
 	container.EnableStaticContent("static")
@@ -75,7 +79,7 @@ func (h *Handler) handleHttpListRequest(writer http.ResponseWriter, request *htt
 	result, err := h.entityStore.GetStatusAndEntities()
 
 	if err != nil {
-		fmt.Printf("nestthermostat.http handleHttpListRequest: Error retrieving entities: %s\n", err)
+		h.log.Error("error retrieving entities", "error", err)
 		result = common.StatusAndEntities{}
 	}
 

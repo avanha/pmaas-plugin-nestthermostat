@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strings"
@@ -24,6 +25,9 @@ type ClientOptions struct {
 	ClientSecret string
 	RefreshToken string
 	SdmProjectID string
+
+	// Logger is where the client logs. It may be left nil.
+	Logger *slog.Logger
 }
 
 type UserInfo struct {
@@ -251,6 +255,10 @@ type Client struct {
 }
 
 func NewClient(ctx context.Context, options ClientOptions) (*Client, error) {
+	if options.Logger == nil {
+		options.Logger = slog.New(slog.DiscardHandler)
+	}
+
 	oauthConfig := &oauth2.Config{
 		ClientID:     options.ClientId,
 		ClientSecret: options.ClientSecret,
@@ -339,7 +347,7 @@ func (c *Client) FetchDevices(ctx context.Context) ([]DeviceTraits, error) {
 		traits, err := ParseTraits(dev.Traits)
 
 		if err != nil {
-			fmt.Printf("Failed to parse traits for device %s: %v\n", dev.Name, err)
+			c.options.Logger.Error("failed to parse traits for device", "name", dev.Name, "error", err)
 			traits = &Traits{}
 		}
 
