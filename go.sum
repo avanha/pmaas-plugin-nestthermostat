@@ -14,8 +14,8 @@ cloud.google.com/go/pubsub/v2 v2.6.0/go.mod h1:4anqvV/w8Pcgu2tO0qr2XgsF3GXHowzry
 github.com/BurntSushi/toml v0.3.1/go.mod h1:xHWCNGjB5oqiDr8zfno3MHue2Ht5sIBksp03qcyfWMU=
 github.com/avanha/pmaas-common v0.0.5 h1:QeTvLZ4guLM58pKqpwdCh+rStbsVXLKNRjqGy9zrSb0=
 github.com/avanha/pmaas-common v0.0.5/go.mod h1:XkhgGSpKVnLrNbsuQLcuxzczTeMrf+FDZBhfxA+nJAY=
-github.com/avanha/pmaas-spi v0.0.14 h1:JIrxgl7Sc3etANISIyYPP86m/MstvG4YmnXf9PpfK28=
-github.com/avanha/pmaas-spi v0.0.14/go.mod h1:vKV8Ke5QXei42A4agIgxypbznjLqFQyi2hvqSyoe7c0=
+github.com/avanha/pmaas-spi v0.0.20 h1:+1DXuFL3dNRGBHrtftZobgDCp84gn700UyhrAhctDyQ=
+github.com/avanha/pmaas-spi v0.0.20/go.mod h1:vKV8Ke5QXei42A4agIgxypbznjLqFQyi2hvqSyoe7c0=
 github.com/census-instrumentation/opencensus-proto v0.2.1/go.mod h1:f6KPmirojxKA12rnyqOA5BBL4O983OfeGPqjHWSTneU=
 github.com/cespare/xxhash/v2 v2.3.0 h1:UL815xU9SqsFlibzuggzjXhog7bL6oX9BbNZnL2UFvs=
 github.com/cespare/xxhash/v2 v2.3.0/go.mod h1:VGX0DQ3Q6kWi7AoAeZDth3/j3BFtOZR5XLFGgcrjCOs=
