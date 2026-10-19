@@ -174,3 +174,34 @@ func TestStatusTemplate_EscapesHostileText(t *testing.T) {
 		t.Fatalf("expected the escaped text on the page:\n%s", output)
 	}
 }
+
+func TestThermostatTemplate_ShowsOneDecimalWhateverTheReadingHas(t *testing.T) {
+	name := path.Base(thermostatTemplate.Paths[0])
+	tmpl, err := template.New(name).Funcs(thermostatTemplate.FuncMap).ParseFS(contentFS, "content/"+thermostatTemplate.Paths[0])
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+
+	var out bytes.Buffer
+	thermostat := data.ThermostatData{
+		Id: "t1", Name: "Hall", Temperature: 21.123456, HasHumidity: true, Humidity: 36.987654, Mode: "HEATCOOL",
+		HeatSetpoint: 19.444444, CoolSetpoint: 24.555555, LastUpdateTime: time.Now(),
+	}
+
+	if err := tmpl.ExecuteTemplate(&out, name, thermostat); err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+
+	page := out.String()
+	for _, want := range []string{"21.1 C", "70.0 F", "37.0%", ">19.4<", ">24.6<"} {
+		if !strings.Contains(page, want) {
+			t.Errorf("missing %q in %s", want, page)
+		}
+	}
+
+	for _, bad := range []string{"21.12", "36.98", "19.44", "24.55"} {
+		if strings.Contains(page, bad) {
+			t.Errorf("too many decimal places (%q) in %s", bad, page)
+		}
+	}
+}

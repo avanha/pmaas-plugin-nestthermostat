@@ -35,7 +35,7 @@ var statusTemplate = spi.TemplateInfo{
 var thermostatTemplate = spi.TemplateInfo{
 	Name: "nestthermostat_thermostat",
 	FuncMap: template.FuncMap{
-		"CelsiusToFahrenheit":    celsiusToFahrenheit,
+		"Temperature": format.Temperature, "Fahrenheit": format.Fahrenheit, "Humidity": format.Humidity,
 		"RelativeTime":           format.Terse,
 		"IsOffline":              isOffline,
 		"IsOnline":               isOnline,
@@ -206,10 +206,6 @@ func (h *Handler) thermostatDataRendererFactory() (spi.EntityRenderer, error) {
 		Styles:              compiledTemplate.Styles,
 		Scripts:             compiledTemplate.Scripts,
 	}, nil
-}
-
-func celsiusToFahrenheit(celsiusValue float32) float32 {
-	return celsiusValue*float32(9)/float32(5) + float32(32)
 }
 
 func isOffline(connectivity environment.Connectivity) bool {
