@@ -175,7 +175,7 @@ func TestStatusTemplate_EscapesHostileText(t *testing.T) {
 	}
 }
 
-func TestThermostatTemplate_ShowsOneDecimalWhateverTheReadingHas(t *testing.T) {
+func TestThermostatTemplate_ShowsTwoDecimalsOfTemperatureAndOneOfHumidityWhateverTheReadingHas(t *testing.T) {
 	name := path.Base(thermostatTemplate.Paths[0])
 	tmpl, err := template.New(name).Funcs(thermostatTemplate.FuncMap).ParseFS(contentFS, "content/"+thermostatTemplate.Paths[0])
 	if err != nil {
@@ -193,13 +193,13 @@ func TestThermostatTemplate_ShowsOneDecimalWhateverTheReadingHas(t *testing.T) {
 	}
 
 	page := out.String()
-	for _, want := range []string{"21.1 C", "70.0 F", "37.0%", ">19.4<", ">24.6<"} {
+	for _, want := range []string{"21.12 C", "70.02 F", "37.0%", ">19.44<", ">24.56<"} {
 		if !strings.Contains(page, want) {
 			t.Errorf("missing %q in %s", want, page)
 		}
 	}
 
-	for _, bad := range []string{"21.12", "36.98", "19.44", "24.55"} {
+	for _, bad := range []string{"21.123", "36.98", "19.444", "24.555"} {
 		if strings.Contains(page, bad) {
 			t.Errorf("too many decimal places (%q) in %s", bad, page)
 		}
