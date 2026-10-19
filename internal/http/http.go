@@ -4,6 +4,7 @@ import (
 	"embed"
 	"errors"
 	"fmt"
+	"github.com/avanha/pmaas-spi/format"
 	"github.com/avanha/pmaas-spi/logging"
 	"html/template"
 	"io"
@@ -24,7 +25,7 @@ var contentFS embed.FS
 var statusTemplate = spi.TemplateInfo{
 	Name: "nestthermostat_status",
 	FuncMap: template.FuncMap{
-		"FormatRemaining": formatRemaining,
+		"FormatRemaining": format.Remaining,
 	},
 	Paths:   []string{"templates/nestthermostat_status.htmlt"},
 	Styles:  []string{"css/nestthermostat_status.css"},
@@ -35,7 +36,7 @@ var thermostatTemplate = spi.TemplateInfo{
 	Name: "nestthermostat_thermostat",
 	FuncMap: template.FuncMap{
 		"CelsiusToFahrenheit":    celsiusToFahrenheit,
-		"RelativeTime":           relativeTime,
+		"RelativeTime":           format.Terse,
 		"IsOffline":              isOffline,
 		"IsOnline":               isOnline,
 		"FormatConnectivityTime": formatConnectivityTime,
@@ -209,56 +210,6 @@ func (h *Handler) thermostatDataRendererFactory() (spi.EntityRenderer, error) {
 
 func celsiusToFahrenheit(celsiusValue float32) float32 {
 	return celsiusValue*float32(9)/float32(5) + float32(32)
-}
-
-func relativeTime(timeValue time.Time) string {
-	elapsed := time.Now().Sub(timeValue).Truncate(time.Second)
-
-	if elapsed.Seconds() < 30 {
-		return "< 30s"
-	}
-
-	if elapsed.Seconds() < 60 {
-		return "< 1m"
-	}
-
-	elapsed = elapsed.Truncate(time.Minute)
-
-	if elapsed.Minutes() < 60 {
-		return fmt.Sprintf("%vm", elapsed.Minutes())
-	}
-
-	elapsed = elapsed.Truncate(time.Hour)
-
-	return fmt.Sprintf("%vh", elapsed.Hours())
-}
-
-// formatRemaining says how far a time is from now: "in 6d 23h" for one still to come, "2h 5m ago" for
-// one that has passed. It keeps only the two most significant units, which is all anyone reading a
-// status page wants.
-func formatRemaining(t time.Time) string {
-	remaining := time.Until(t)
-
-	if remaining >= 0 {
-		return "in " + formatSpan(remaining)
-	}
-
-	return formatSpan(-remaining) + " ago"
-}
-
-func formatSpan(d time.Duration) string {
-	d = d.Truncate(time.Minute)
-
-	switch {
-	case d < time.Minute:
-		return "< 1m"
-	case d < time.Hour:
-		return fmt.Sprintf("%dm", int(d.Minutes()))
-	case d < 24*time.Hour:
-		return fmt.Sprintf("%dh %dm", int(d.Hours()), int(d.Minutes())%60)
-	default:
-		return fmt.Sprintf("%dd %dh", int(d.Hours())/24, int(d.Hours())%24)
-	}
 }
 
 func isOffline(connectivity environment.Connectivity) bool {
