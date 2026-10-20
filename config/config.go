@@ -1,6 +1,11 @@
 package config
 
-import "time"
+import (
+	"sync/atomic"
+	"time"
+
+	"github.com/avanha/pmaas-spi/entity"
+)
 
 type Thermostat struct {
 	ID   string
@@ -26,8 +31,58 @@ type PluginConfig struct {
 	// refresh tokens no longer expire on a schedule; the status page then shows no expiration unless
 	// Google reports one.
 	RefreshTokenLifetimeEstimate time.Duration
+
+	// handles are the assembly's handles on the thermostats it added, by device id (see AddThermostat). A copy of the config shares them.
+	handles map[string]*ThermostatHandle
 }
 
-func (c *PluginConfig) AddThermostat(id string, name string) {
+// AddThermostat adds a thermostat to know by its device id and name. The handle it returns names the thermostat's entity to the
+// assembly, to put it in a group, and can be ignored.
+func (c *PluginConfig) AddThermostat(id string, name string) *ThermostatHandle {
 	c.Thermostats = append(c.Thermostats, Thermostat{ID: id, Name: name})
+
+	if c.handles == nil {
+		c.handles = make(map[string]*ThermostatHandle)
+	}
+
+	handle, ok := c.handles[id]
+	if !ok {
+		handle = &ThermostatHandle{}
+		c.handles[id] = handle
+	}
+
+	return handle
+}
+
+// HandleFor is the handle on the thermostat with the device id, if the assembly added it with AddThermostat. For the plugin.
+func (c PluginConfig) HandleFor(id string) *ThermostatHandle {
+	return c.handles[id]
+}
+
+// ThermostatHandle is the assembly's handle on a thermostat. It is an entity.Ref, so that the assembly can put the thermostat in a
+// group.
+type ThermostatHandle struct {
+	entityId atomic.Pointer[string]
+}
+
+var _ entity.Ref = (*ThermostatHandle)(nil)
+
+// RegisteredId is the id of the thermostat's entity, or false until the plugin has registered it and after it has stopped.
+func (h *ThermostatHandle) RegisteredId() (string, bool) {
+	if id := h.entityId.Load(); id != nil && *id != "" {
+		return *id, true
+	}
+
+	return "", false
+}
+
+// SetEntityId is for the plugin: the id the entity was registered under, or empty when it is deregistered.
+func (h *ThermostatHandle) SetEntityId(id string) {
+	if id == "" {
+		h.entityId.Store(nil)
+
+		return
+	}
+
+	h.entityId.Store(&id)
 }

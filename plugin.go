@@ -30,6 +30,7 @@ import (
 	"github.com/avanha/pmaas-spi/alert"
 	"github.com/avanha/pmaas-spi/environment"
 	"github.com/avanha/pmaas-spi/events"
+	"github.com/avanha/pmaas-spi/group"
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/google"
 	"google.golang.org/api/googleapi"
@@ -393,7 +394,32 @@ func (p *plugin) registerNewThermostat(t *entities.NestThermostat) {
 	t.PmaasEntityId = pmaasEntityId
 	p.thermostats[t.Id] = t
 
+	if handle := p.config.HandleFor(t.Id); handle != nil {
+		handle.SetEntityId(pmaasEntityId)
+	}
+
+	p.giveView(t.Id, pmaasEntityId)
+
 	p.log.Debug("registered thermostat as entity", "id", t.Id, "value", t.Name.Value, "pmaasEntityId", pmaasEntityId)
+}
+
+// giveView gives the thermostat's entity the view of its card, for a page that lists the entities of many plugins. Runs on the
+// plugin goroutine, and so does the view.
+func (p *plugin) giveView(id string, entityId string) {
+	err := p.container.RegisterEntityView(entityId, func() (spi.EntityView, error) {
+		t, ok := p.thermostats[id]
+		if !ok {
+			return spi.EntityView{}, errors.New("the thermostat is no longer known")
+		}
+
+		// By pointer: that is what the card's renderer takes (the page's own list is made of them).
+		card := t.GetDisplayData()
+
+		return spi.EntityView{Key: "nest/" + id, Category: group.CategoryThermometers, Value: &card}, nil
+	})
+	if err != nil {
+		p.log.Error("unable to register the view of a thermostat", "id", id, "error", err)
+	}
 }
 
 func (p *plugin) broadcastThermostatStateChanged(t *entities.NestThermostat) {
@@ -480,6 +506,10 @@ func (p *plugin) deregisterEntities() {
 		if err := p.container.DeregisterEntity(t.PmaasEntityId); err != nil {
 			p.log.Error("failed to deregister thermostat", "id", id, "error", err)
 			continue
+		}
+
+		if handle := p.config.HandleFor(id); handle != nil {
+			handle.SetEntityId("")
 		}
 
 		t.PmaasEntityId = ""

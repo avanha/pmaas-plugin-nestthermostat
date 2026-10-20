@@ -59,3 +59,8 @@ Create a `NestThermostat` struct implementing `tracking.Trackable`:
    - Implement the Pub/Sub listener loop.
 6. **Plugin**: Wire everything into `plugin.go`, following the structure of `pmaas-plugin-dblog` but using the push-based model.
 7. **Environment Sync**: Ensure the entity type and traits are compatible with `pmaas-plugin-environment` for rendering.
+
+## Putting a thermostat in a group
+
+`AddThermostat(id, name)` returns a handle, an `entity.Ref` (`RegisteredId`), to give to the groups plugin. The thermostat's entity has a view,
+its card, listed under Thermometers.
