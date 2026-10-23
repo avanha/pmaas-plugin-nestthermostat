@@ -24,6 +24,19 @@ func TestNestthermostatScript(t *testing.T) {
 	}
 }
 
+// The nestthermostatThermostat script is tested in node, with fakes for the document and the request. Skipped where node isn't installed.
+func TestNestthermostatThermostatScript(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node isn't installed")
+	}
+
+	out, err := exec.Command(node, "js_test/nestthermostat_thermostat_test.js").CombinedOutput()
+	if err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+}
+
 func stylesheets(t *testing.T) map[string]string {
 	t.Helper()
 
