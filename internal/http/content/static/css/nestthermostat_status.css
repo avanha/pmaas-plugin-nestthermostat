@@ -33,6 +33,7 @@
    lets a flex item shrink below the width of its text. */
 .entity-nestthermostat-status .container > .wrap {
     white-space: normal;
+    word-wrap: break-word;
     overflow-wrap: anywhere;
     min-width: 0;
     flex: 1 1 auto;
